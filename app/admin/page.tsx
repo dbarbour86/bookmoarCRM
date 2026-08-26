@@ -242,25 +242,23 @@ export default function MasterAdminPage() {
                     </span>
                   </div>
 
-                  <div className="flex flex-col items-end">
-                    {tenant.serviceStatus === 'ACTIVE' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                        ACTIVE
-                      </span>
-                    )}
-                    {tenant.serviceStatus === 'SUSPENDED' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        SUSPENDED
-                      </span>
-                    )}
-                    {tenant.serviceStatus === 'TERMINATED' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-700 border border-slate-300">
-                        <Power className="w-3.5 h-3.5" />
-                        TERMINATED
-                      </span>
-                    )}
+                  <div className="flex flex-col items-end gap-1">
+                    <label className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Account Status</label>
+                    <select
+                      value={tenant.serviceStatus}
+                      onChange={(e) => handleStatusChange(tenant.id, e.target.value as any)}
+                      className={`px-3 py-1 rounded-full text-xs font-extrabold border cursor-pointer shadow-sm transition ${
+                        tenant.serviceStatus === 'ACTIVE'
+                          ? 'bg-emerald-100 text-emerald-900 border-emerald-300 hover:bg-emerald-200'
+                          : tenant.serviceStatus === 'SUSPENDED'
+                          ? 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                          : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300'
+                      }`}
+                    >
+                      <option value="ACTIVE">● ACTIVE (Service Enabled)</option>
+                      <option value="SUSPENDED">▲ SUSPENDED (Paused)</option>
+                      <option value="TERMINATED">■ TERMINATED (Closed)</option>
+                    </select>
                   </div>
                 </div>
 
