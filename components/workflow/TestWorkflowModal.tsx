@@ -28,7 +28,7 @@ export const TestWorkflowModal: React.FC<TestWorkflowModalProps> = ({ isOpen, on
       eventType: version.triggerConfig.eventType,
       source: 'SIMULATED_TEST_RUNNER',
       payload: {
-        contactId: contact.id,
+        contactId: (contact as any).id || 'contact_john_doe',
         name: contact.name,
         email: contact.email,
         phone: contact.phone,
