@@ -1374,6 +1374,23 @@ class MockDatabase {
 
     return await this.getTenantBusinessConfig(tenantId);
   }
+
+  public async getWorkflowExecutionCount(workflowId: string): Promise<number> {
+    if (process.env.DATABASE_URL) {
+      try {
+        const count = await prisma.workflowExecution.count({
+          where: { workflowId },
+        });
+        return count;
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getWorkflowExecutionCount error:', e.message);
+      }
+    }
+
+    const wf = this.workflows.get(workflowId);
+    if (wf && wf.runsCount !== undefined) return wf.runsCount;
+    return this.executions.filter((e) => e.workflowId === workflowId).length;
+  }
 }
 
 export const db = new MockDatabase();
