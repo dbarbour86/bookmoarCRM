@@ -14,18 +14,22 @@ export interface EventGuardResult {
   failedFlag?: string;
 }
 
-export function evaluateEventGuard(tenantId: string, eventType: string): EventGuardResult {
-  const tenant = db.tenants.get(tenantId) || {
-    id: tenantId,
-    name: "Tyree's Auto Detailing",
-    serviceStatus: 'ACTIVE',
-    masterAutomationEnabled: true,
-    smsEnabled: true,
-    emailEnabled: true,
-    crmWriteEnabled: true,
-    missedCallEnabled: true,
-    reviewsEnabled: true,
-  };
+export async function evaluateEventGuard(tenantId: string, eventType: string): Promise<EventGuardResult> {
+  let tenant = (await db.getAllTenants()).find((t) => t.id === tenantId);
+
+  if (!tenant) {
+    tenant = db.tenants.get(tenantId) || {
+      id: tenantId,
+      name: "Tyree's Auto Detailing",
+      serviceStatus: 'ACTIVE',
+      masterAutomationEnabled: true,
+      smsEnabled: true,
+      emailEnabled: true,
+      crmWriteEnabled: true,
+      missedCallEnabled: true,
+      reviewsEnabled: true,
+    };
+  }
 
   if (tenant.serviceStatus === 'SUSPENDED') {
     return { allowed: false, reason: 'Tenant managed services are SUSPENDED.', failedFlag: 'serviceStatus:SUSPENDED' };
@@ -60,8 +64,8 @@ export class EventBus {
       eventType: input.eventType,
     });
 
-    // 2. Evaluate Guard
-    const guard = evaluateEventGuard(input.tenantId, input.eventType);
+    // 2. Evaluate Guard against PostgreSQL Tenant Service Status
+    const guard = await evaluateEventGuard(input.tenantId, input.eventType);
     const executions: WorkflowExecutionData[] = [];
 
     // 3. Find matching active workflows for this tenant (Auto-seeds Speed-to-Lead if missing)
