@@ -301,21 +301,37 @@ class MockDatabase {
     if (!process.env.DATABASE_URL) return;
 
     try {
-      // 1. ClientTenant
-      let dbTenant = await prisma.clientTenant.findUnique({ where: { id: tenantId } });
+      // 1. ClientTenant: Tyree's
+      let dbTenant = await prisma.clientTenant.findUnique({ where: { id: 'tenant_tyrees_auto' } });
       if (!dbTenant) {
-        dbTenant = await prisma.clientTenant.create({
+        await prisma.clientTenant.create({
           data: {
-            id: tenantId,
-            name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : 'Client Tenant',
+            id: 'tenant_tyrees_auto',
+            name: "Tyree's Auto Detailing",
             domain: 'tyreesautodetailing.com',
             serviceStatus: 'ACTIVE',
             plan: 'Grow',
+            masterAutomationEnabled: true,
           },
         });
       }
 
-      // 2. WebsiteIntegration
+      // 2. ClientTenant: Apex Lawn & Care
+      let dbApex = await prisma.clientTenant.findUnique({ where: { id: 'tenant_apex_lawn' } });
+      if (!dbApex) {
+        await prisma.clientTenant.create({
+          data: {
+            id: 'tenant_apex_lawn',
+            name: 'Apex Lawn & Care',
+            domain: 'apexlawncare.com',
+            serviceStatus: 'SUSPENDED',
+            plan: 'Scale',
+            masterAutomationEnabled: false,
+          },
+        });
+      }
+
+      // 3. WebsiteIntegration
       const publicSiteKey = 'public_tyrees_4K8A9B2C';
       let dbSite = await prisma.websiteIntegration.findUnique({ where: { publicSiteKey } });
       if (!dbSite) {
@@ -1373,6 +1389,142 @@ class MockDatabase {
     });
 
     return await this.getTenantBusinessConfig(tenantId);
+  }
+
+  public async getAllTenants(): Promise<TenantData[]> {
+    if (process.env.DATABASE_URL) {
+      try {
+        await this.ensureTenantDatabaseSeeded('tenant_tyrees_auto');
+        await this.ensureTenantDatabaseSeeded('tenant_apex_lawn');
+
+        const dbTenants = await prisma.clientTenant.findMany({
+          orderBy: { createdAt: 'asc' },
+        });
+
+        if (dbTenants.length > 0) {
+          const result: TenantData[] = dbTenants.map((t) => ({
+            id: t.id,
+            name: t.name,
+            domain: t.domain,
+            serviceStatus: t.serviceStatus as 'ACTIVE' | 'SUSPENDED' | 'TERMINATED',
+            plan: t.plan,
+            masterAutomationEnabled: t.masterAutomationEnabled,
+            smsEnabled: t.smsEnabled,
+            emailEnabled: t.emailEnabled,
+            crmWriteEnabled: t.crmWriteEnabled,
+            missedCallEnabled: t.missedCallEnabled,
+            reviewsEnabled: t.reviewsEnabled,
+            phoneConfig: JSON.parse(t.phoneConfig || '{}'),
+            emailConfig: JSON.parse(t.emailConfig || '{}'),
+            websiteConfig: JSON.parse(t.websiteConfig || '{}'),
+            createdAt: t.createdAt.toISOString(),
+            updatedAt: t.updatedAt.toISOString(),
+          }));
+
+          for (const t of result) {
+            this.tenants.set(t.id, t);
+          }
+
+          return result;
+        }
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getAllTenants error:', e.message);
+      }
+    }
+
+    return Array.from(this.tenants.values());
+  }
+
+  public async updateTenantServiceStatus(input: {
+    tenantId: string;
+    serviceStatus: 'ACTIVE' | 'SUSPENDED' | 'TERMINATED';
+    userId?: string;
+  }): Promise<{ tenant: TenantData; auditLog: AuditLogData }> {
+    const { tenantId, serviceStatus, userId = 'user_master_admin' } = input;
+    const masterAutomationEnabled = serviceStatus === 'ACTIVE';
+
+    let updatedTenant: TenantData | null = null;
+    let auditLogEntry: AuditLogData | null = null;
+
+    if (process.env.DATABASE_URL) {
+      try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
+
+        const dbTenant = await prisma.clientTenant.update({
+          where: { id: tenantId },
+          data: {
+            serviceStatus,
+            masterAutomationEnabled,
+            updatedAt: new Date(),
+          },
+        });
+
+        updatedTenant = {
+          id: dbTenant.id,
+          name: dbTenant.name,
+          domain: dbTenant.domain,
+          serviceStatus: dbTenant.serviceStatus as any,
+          plan: dbTenant.plan,
+          masterAutomationEnabled: dbTenant.masterAutomationEnabled,
+          smsEnabled: dbTenant.smsEnabled,
+          emailEnabled: dbTenant.emailEnabled,
+          crmWriteEnabled: dbTenant.crmWriteEnabled,
+          missedCallEnabled: dbTenant.missedCallEnabled,
+          reviewsEnabled: dbTenant.reviewsEnabled,
+          phoneConfig: JSON.parse(dbTenant.phoneConfig || '{}'),
+          emailConfig: JSON.parse(dbTenant.emailConfig || '{}'),
+          websiteConfig: JSON.parse(dbTenant.websiteConfig || '{}'),
+          createdAt: dbTenant.createdAt.toISOString(),
+          updatedAt: dbTenant.updatedAt.toISOString(),
+        };
+
+        const dbAudit = await prisma.auditLog.create({
+          data: {
+            tenantId,
+            userId,
+            action: `SERVICE_STATUS_CHANGED_${serviceStatus}`,
+            details: JSON.stringify({ tenantName: dbTenant.name, newStatus: serviceStatus }),
+          },
+        });
+
+        auditLogEntry = {
+          id: dbAudit.id,
+          tenantId: dbAudit.tenantId || undefined,
+          userId: dbAudit.userId,
+          action: dbAudit.action,
+          details: JSON.parse(dbAudit.details || '{}'),
+          timestamp: dbAudit.timestamp.toISOString(),
+        };
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] updateTenantServiceStatus failed:', e.message);
+        throw new Error(`Database tenant status update failed: ${e.message}`);
+      }
+    }
+
+    if (!updatedTenant) {
+      const existing = this.tenants.get(tenantId);
+      if (!existing) throw new Error('Tenant not found');
+
+      existing.serviceStatus = serviceStatus;
+      existing.masterAutomationEnabled = masterAutomationEnabled;
+      existing.updatedAt = new Date().toISOString();
+      updatedTenant = existing;
+
+      auditLogEntry = {
+        id: `audit_stat_${Date.now()}`,
+        tenantId: existing.id,
+        userId,
+        action: `SERVICE_STATUS_CHANGED_${serviceStatus}`,
+        details: { tenantName: existing.name, newStatus: serviceStatus },
+        timestamp: new Date().toISOString(),
+      };
+      this.auditLogs.unshift(auditLogEntry);
+    } else {
+      this.tenants.set(updatedTenant.id, updatedTenant);
+      if (auditLogEntry) this.auditLogs.unshift(auditLogEntry);
+    }
+
+    return { tenant: updatedTenant, auditLog: auditLogEntry! };
   }
 
   public async mutateBusinessConfig(input: {

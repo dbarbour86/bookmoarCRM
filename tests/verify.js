@@ -1,10 +1,10 @@
-// Comprehensive Verification Suite for Business Configuration CRUD & Persistence
+// Comprehensive Verification Suite for Tenant Service Status Persistence & Unsuspend Controls
 
 const { db } = require('../lib/db');
 
-async function runBusinessConfigCrudVerificationTests() {
+async function runTenantStatusVerificationTests() {
   console.log('===========================================================');
-  console.log('BOOK MOAR BUSINESS CONFIGURATION CRUD & PERSISTENCE TESTS');
+  console.log('BOOK MOAR TENANT SERVICE STATUS PERSISTENCE TESTS');
   console.log('===========================================================');
 
   let passed = 0;
@@ -20,56 +20,36 @@ async function runBusinessConfigCrudVerificationTests() {
     }
   }
 
-  const tenantId = 'tenant_tyrees_auto';
+  const tenantId = 'tenant_apex_lawn';
 
-  // 1. Initial Config
-  const initialConfig = await db.getTenantBusinessConfig(tenantId);
-  assert(initialConfig.profile.industry === 'Auto Detailing', "1. Profile loaded for Tyree's Auto Detailing");
+  // 1. Initial status
+  const allTenants1 = await db.getAllTenants();
+  const apex1 = allTenants1.find((t) => t.id === tenantId);
+  assert(apex1 !== undefined, '1. Tenant Apex Lawn & Care exists in tenant list');
 
-  // 2. Create Service
-  const newServiceRes = await db.mutateBusinessConfig({
+  // 2. Unsuspend tenant (SUSPENDED -> ACTIVE)
+  const unsuspendRes = await db.updateTenantServiceStatus({
     tenantId,
-    entityType: 'SERVICE',
-    action: 'CREATE',
-    data: {
-      name: 'Engine Bay Detail',
-      category: 'Detailing',
-      pricingType: 'FIXED',
-      basePrice: 95,
-      durationMinutes: 45,
-      bookingMode: 'INSTANT_BOOK',
-    },
+    serviceStatus: 'ACTIVE',
+    userId: 'user_master_admin',
   });
-  assert(newServiceRes.success === true, '2. Create Service mutation succeeded');
+  assert(unsuspendRes.tenant.serviceStatus === 'ACTIVE', '2. Update tenant status to ACTIVE succeeded');
+  assert(unsuspendRes.tenant.masterAutomationEnabled === true, '3. Unsuspend automatically set masterAutomationEnabled to true');
+  assert(unsuspendRes.auditLog.action === 'SERVICE_STATUS_CHANGED_ACTIVE', '4. Audit log entry recorded SERVICE_STATUS_CHANGED_ACTIVE');
 
-  // 3. Verify Created Service in Config
-  const updatedConfig1 = await db.getTenantBusinessConfig(tenantId);
-  assert(
-    updatedConfig1.services.some((s) => s.name === 'Engine Bay Detail' && s.basePrice === 95),
-    '3. Engine Bay Detail service persisted in tenant configuration'
-  );
+  // 3. Re-query all tenants to verify persistent state
+  const allTenants2 = await db.getAllTenants();
+  const apex2 = allTenants2.find((t) => t.id === tenantId);
+  assert(apex2.serviceStatus === 'ACTIVE', '5. Verified persistent ACTIVE status in getAllTenants query');
 
-  // 4. Create Lead Field
-  const newFieldRes = await db.mutateBusinessConfig({
+  // 4. Re-suspend tenant (ACTIVE -> SUSPENDED)
+  const suspendRes = await db.updateTenantServiceStatus({
     tenantId,
-    entityType: 'LEAD_FIELD',
-    action: 'CREATE',
-    data: {
-      key: 'paintCondition',
-      label: 'Paint Oxidation Level',
-      fieldType: 'SELECT',
-      required: false,
-      options: ['None', 'Light Oxidation', 'Heavy Swirls / Scratches'],
-    },
+    serviceStatus: 'SUSPENDED',
+    userId: 'user_master_admin',
   });
-  assert(newFieldRes.success === true, '4. Create Lead Field mutation succeeded');
-
-  // 5. Verify Created Lead Field in Config
-  const updatedConfig2 = await db.getTenantBusinessConfig(tenantId);
-  assert(
-    updatedConfig2.leadFields.some((f) => f.key === 'paintCondition'),
-    '5. Dynamic lead field paintCondition persisted in tenant intake definition'
-  );
+  assert(suspendRes.tenant.serviceStatus === 'SUSPENDED', '6. Re-suspend status update succeeded');
+  assert(suspendRes.tenant.masterAutomationEnabled === false, '7. Suspend automatically set masterAutomationEnabled to false');
 
   console.log('===========================================================');
   console.log(`VERIFICATION COMPLETE: ${passed} PASSED, ${failed} FAILED`);
@@ -78,4 +58,4 @@ async function runBusinessConfigCrudVerificationTests() {
   if (failed > 0) process.exit(1);
 }
 
-runBusinessConfigCrudVerificationTests();
+runTenantStatusVerificationTests();

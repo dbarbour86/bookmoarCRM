@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { db, TenantData, WebsiteIntegrationData } from '@/lib/db';
 import { generateWebsiteExportZip } from '@/lib/export/websiteExporter';
@@ -36,32 +36,53 @@ export default function MasterAdminPage() {
   const [logs, setLogs] = useState(db.auditLogs);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  const fetchTenants = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/tenants');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.tenants) {
+          setTenants(data.tenants);
+        }
+      }
+    } catch (err) {
+      console.warn('[TENANT_FETCH_ERR]', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTenants();
+  }, [fetchTenants]);
+
   const refreshTenants = () => {
-    setTenants(Array.from(db.tenants.values()));
+    fetchTenants();
     setLogs([...db.auditLogs]);
   };
 
-  const handleStatusChange = (tenantId: string, newStatus: 'ACTIVE' | 'SUSPENDED' | 'TERMINATED') => {
-    const tenant = db.tenants.get(tenantId);
-    if (!tenant) return;
+  const handleStatusChange = async (tenantId: string, newStatus: 'ACTIVE' | 'SUSPENDED' | 'TERMINATED') => {
+    try {
+      const res = await fetch('/api/admin/tenants/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId,
+          serviceStatus: newStatus,
+          userId: 'user_master_admin',
+        }),
+      });
 
-    tenant.serviceStatus = newStatus;
-    if (newStatus === 'SUSPENDED' || newStatus === 'TERMINATED') {
-      tenant.masterAutomationEnabled = false;
-    } else if (newStatus === 'ACTIVE') {
-      tenant.masterAutomationEnabled = true;
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        await fetchTenants();
+      } else {
+        alert(`Failed to update tenant status: ${data.error || 'Unknown error'}`);
+        await fetchTenants();
+      }
+    } catch (err: any) {
+      alert(`Status update error: ${err.message}`);
+      await fetchTenants();
     }
-
-    db.auditLogs.unshift({
-      id: `audit_stat_${Date.now()}`,
-      tenantId: tenant.id,
-      userId: 'user_master_admin',
-      action: `SERVICE_STATUS_CHANGED_${newStatus}`,
-      details: { tenantName: tenant.name, newStatus },
-      timestamp: new Date().toISOString(),
-    });
-
-    refreshTenants();
   };
 
   const handleToggleCapability = (tenantId: string, flag: keyof TenantData) => {
