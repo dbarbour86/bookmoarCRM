@@ -155,7 +155,7 @@ export default function MasterAdminPage() {
 
       setAuditReport(res.auditReport);
 
-      const blob = new Blob([res.zipBuffer], { type: 'application/zip' });
+      const blob = new Blob([new Uint8Array(res.zipBuffer)], { type: 'application/zip' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
