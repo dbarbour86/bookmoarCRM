@@ -15,32 +15,23 @@ export interface EventGuardResult {
 }
 
 export async function evaluateEventGuard(tenantId: string, eventType: string): Promise<EventGuardResult> {
-  let tenant = (await db.getAllTenants()).find((t) => t.id === tenantId);
+  const allTenants = await db.getAllTenants();
+  const tenant = allTenants.find((t) => t.id === tenantId) || db.tenants.get(tenantId);
 
-  if (!tenant) {
-    tenant = db.tenants.get(tenantId) || {
-      id: tenantId,
-      name: "Tyree's Auto Detailing",
-      serviceStatus: 'ACTIVE',
-      masterAutomationEnabled: true,
-      smsEnabled: true,
-      emailEnabled: true,
-      crmWriteEnabled: true,
-      missedCallEnabled: true,
-      reviewsEnabled: true,
-    };
-  }
+  const serviceStatus = tenant?.serviceStatus || 'ACTIVE';
+  const masterAutomationEnabled = tenant ? tenant.masterAutomationEnabled : true;
+  const smsEnabled = tenant ? tenant.smsEnabled : true;
 
-  if (tenant.serviceStatus === 'SUSPENDED') {
+  if (serviceStatus === 'SUSPENDED') {
     return { allowed: false, reason: 'Tenant managed services are SUSPENDED.', failedFlag: 'serviceStatus:SUSPENDED' };
   }
-  if (tenant.serviceStatus === 'TERMINATED') {
+  if (serviceStatus === 'TERMINATED') {
     return { allowed: false, reason: 'Tenant managed services are TERMINATED.', failedFlag: 'serviceStatus:TERMINATED' };
   }
-  if (!tenant.masterAutomationEnabled) {
+  if (!masterAutomationEnabled) {
     return { allowed: false, reason: 'Master Automation Kill Switch is OFF for this tenant.', failedFlag: 'masterAutomationEnabled' };
   }
-  if (eventType.includes('SMS') && !tenant.smsEnabled) {
+  if (eventType.includes('SMS') && !smsEnabled) {
     return { allowed: false, reason: 'SMS Automation capability is DISABLED for this tenant.', failedFlag: 'smsEnabled' };
   }
 
