@@ -2,7 +2,7 @@
 
 import { db } from '@/lib/db';
 import { EventBus, evaluateEventGuard } from '@/lib/events/eventBus';
-import { generateWebsiteExportZip } from '@/lib/exporter/websiteExporter';
+import { exportAllDataZip } from '@/lib/export/clientDataExporter';
 
 export async function runSystemVerification() {
   console.log('===========================================================');
@@ -66,13 +66,9 @@ export async function runSystemVerification() {
     payload: { contactId: 'contact_john_doe', rating: 2 },
   });
 
-  // 6. Test Portable Website Exporter (Independent of Status)
-  const exportResult = await generateWebsiteExportZip({
-    tenantId: 'tenant_tyrees_auto',
-    adapterType: 'WEB3FORMS',
-  });
-  assert(!!exportResult.filename && exportResult.zipBuffer.length > 0, 'Website Exporter generated ZIP buffer file');
-  assert(exportResult.auditReport.includes('EXPORT_AUDIT_WARNINGS'), 'Audit Report generated with warning markers');
+  // 6. Test Data Exporter
+  const exportResult = await exportAllDataZip('tenant_tyrees_auto');
+  assert(exportResult.length > 0, 'Data Exporter generated ZIP buffer file');
 
   console.log('===========================================================');
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);
