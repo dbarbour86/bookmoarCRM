@@ -215,10 +215,10 @@ class MockDatabase {
   public auditLogs: AuditLogData[] = [];
 
   constructor() {
-    this.seed();
+    this.seedMemory();
   }
 
-  private seed() {
+  private seedMemory() {
     const tyreeTenant: TenantData = {
       id: 'tenant_tyrees_auto',
       name: "Tyree's Auto Detailing",
@@ -294,25 +294,77 @@ class MockDatabase {
       { id: 'stage_completed', name: 'Job Completed', order: 4 },
       { id: 'stage_review_sent', name: 'Review Requested', order: 5 },
     ]);
-
-    const c1: ContactData = {
-      id: 'contact_john_doe',
-      tenantId: 'tenant_tyrees_auto',
-      name: 'John Doe',
-      email: 'john@example.com',
-      phone: '+19195550144',
-      status: 'LEAD',
-      tags: ['Website Quote', 'Full Detail'],
-      customFields: { vehicle: '2023 Tesla Model 3', estimatedValue: 350 },
-      createdAt: new Date().toISOString(),
-    };
-    this.contacts.set(c1.id, c1);
   }
 
-  // Database / Storage Methods with Prisma PostgreSQL Auto-Sync
+  // Ensure Database Tenant & Integration exist in PostgreSQL idempotently
+  public async ensureTenantDatabaseSeeded(tenantId: string = 'tenant_tyrees_auto'): Promise<void> {
+    if (!process.env.DATABASE_URL) return;
+
+    try {
+      // 1. ClientTenant
+      let dbTenant = await prisma.clientTenant.findUnique({ where: { id: tenantId } });
+      if (!dbTenant) {
+        dbTenant = await prisma.clientTenant.create({
+          data: {
+            id: tenantId,
+            name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : 'Client Tenant',
+            domain: 'tyreesautodetailing.com',
+            serviceStatus: 'ACTIVE',
+            plan: 'Grow',
+          },
+        });
+      }
+
+      // 2. WebsiteIntegration
+      const publicSiteKey = 'public_tyrees_4K8A9B2C';
+      let dbSite = await prisma.websiteIntegration.findUnique({ where: { publicSiteKey } });
+      if (!dbSite) {
+        await prisma.websiteIntegration.create({
+          data: {
+            id: 'integration_tyrees_primary',
+            tenantId,
+            name: 'Primary Marketing Website',
+            publicSiteKey,
+            status: 'ACTIVE',
+            allowedDomains: JSON.stringify(['*']),
+          },
+        });
+      }
+
+      // 3. Pipeline & Stages
+      let pipeline = await prisma.pipeline.findFirst({ where: { tenantId } });
+      if (!pipeline) {
+        pipeline = await prisma.pipeline.create({
+          data: { id: `pipe_${tenantId}`, tenantId, name: 'Default Pipeline', isDefault: true },
+        });
+
+        const stages = [
+          { id: 'stage_lead_in', name: 'New Lead', order: 1 },
+          { id: 'stage_contacted', name: 'Contacted / Estimate Sent', order: 2 },
+          { id: 'stage_booked', name: 'Appointment Booked', order: 3 },
+          { id: 'stage_completed', name: 'Job Completed', order: 4 },
+          { id: 'stage_review_sent', name: 'Review Requested', order: 5 },
+        ];
+
+        for (const s of stages) {
+          const existingStage = await prisma.pipelineStage.findUnique({ where: { id: s.id } });
+          if (!existingStage) {
+            await prisma.pipelineStage.create({
+              data: { id: s.id, pipelineId: pipeline.id, name: s.name, order: s.order },
+            });
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[DB_SEED_ERROR] Idempotent seeding error:', err.message);
+    }
+  }
+
+  // 1. Website Integration Lookup
   public async findIntegrationBySiteKey(siteKey: string): Promise<WebsiteIntegrationData | undefined> {
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded();
         const found = await prisma.websiteIntegration.findUnique({
           where: { publicSiteKey: siteKey },
         });
@@ -329,8 +381,8 @@ class MockDatabase {
             updatedAt: found.updatedAt.toISOString(),
           };
         }
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma lookup failed:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] findIntegrationBySiteKey error:', e.message);
       }
     }
 
@@ -361,11 +413,13 @@ class MockDatabase {
     return integration;
   }
 
+  // 2. Persistent Idempotency Check (tenantId + eventId)
   public async checkAndRecordIdempotency(tenantId: string, eventId?: string, responsePayload?: Record<string, any>): Promise<{ isDuplicate: boolean; cachedResponse?: any }> {
     if (!eventId) return { isDuplicate: false };
 
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
         const existing = await prisma.idempotencyRecord.findUnique({
           where: { tenantId_eventId: { tenantId, eventId } },
         });
@@ -383,8 +437,8 @@ class MockDatabase {
           });
         }
         return { isDuplicate: false };
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma idempotency error:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] checkAndRecordIdempotency error:', e.message);
       }
     }
 
@@ -408,6 +462,7 @@ class MockDatabase {
     return { isDuplicate: false };
   }
 
+  // 3. Contact Deduplication & PostgreSQL Persistence
   public async findOrCreateContactByPhoneOrEmail(
     tenantId: string,
     contactInput: { firstName?: string; lastName?: string; name?: string; phone?: string; email?: string; fields?: Record<string, any> }
@@ -418,16 +473,7 @@ class MockDatabase {
 
     if (process.env.DATABASE_URL) {
       try {
-        const existingTenant = await prisma.clientTenant.findUnique({ where: { id: tenantId } });
-        if (!existingTenant) {
-          await prisma.clientTenant.create({
-            data: {
-              id: tenantId,
-              name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : 'Client Tenant',
-              domain: 'tyreesautodetailing.com',
-            },
-          });
-        }
+        await this.ensureTenantDatabaseSeeded(tenantId);
 
         const existingPrismaContact = await prisma.contact.findFirst({
           where: {
@@ -495,11 +541,13 @@ class MockDatabase {
 
         this.contacts.set(resContact.id, resContact);
         return resContact;
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma contact persistence fallback:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] Contact persistence error:', e.message);
+        throw new Error(`Database Contact persistence failed: ${e.message}`);
       }
     }
 
+    // In-memory fallback (only for local unit test scripts without DATABASE_URL)
     const existing = Array.from(this.contacts.values()).find(
       (c) =>
         c.tenantId === tenantId &&
@@ -536,33 +584,33 @@ class MockDatabase {
   public async getTenantContacts(tenantId: string): Promise<ContactData[]> {
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
         const list = await prisma.contact.findMany({
           where: { tenantId },
           orderBy: { createdAt: 'desc' },
         });
 
-        if (list.length > 0) {
-          return list.map((c) => ({
-            id: c.id,
-            tenantId: c.tenantId,
-            name: c.name,
-            email: c.email || '',
-            phone: c.phone || '',
-            status: c.status as any,
-            tags: JSON.parse(c.tags || '[]'),
-            customFields: JSON.parse(c.customFields || '{}'),
-            createdAt: c.createdAt.toISOString(),
-          }));
-        }
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma getTenantContacts fallback:', (e as any).message);
+        return list.map((c) => ({
+          id: c.id,
+          tenantId: c.tenantId,
+          name: c.name,
+          email: c.email || '',
+          phone: c.phone || '',
+          status: c.status as any,
+          tags: JSON.parse(c.tags || '[]'),
+          customFields: JSON.parse(c.customFields || '{}'),
+          createdAt: c.createdAt.toISOString(),
+        }));
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getTenantContacts error:', e.message);
+        throw new Error(`Database query failed for contacts: ${e.message}`);
       }
     }
 
     return Array.from(this.contacts.values()).filter((c) => c.tenantId === tenantId);
   }
 
-  // Platform Event Persistence
+  // 4. Platform Event Persistence
   public async createPlatformEvent(input: { tenantId: string; eventType: string; source: string; payload: Record<string, any> }): Promise<PlatformEventData> {
     const id = `evt_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const event: PlatformEventData = {
@@ -576,6 +624,7 @@ class MockDatabase {
 
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(input.tenantId);
         const created = await prisma.platformEvent.create({
           data: {
             id,
@@ -586,8 +635,8 @@ class MockDatabase {
           },
         });
         event.id = created.id;
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma PlatformEvent create error:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] PlatformEvent create error:', e.message);
       }
     }
 
@@ -595,31 +644,31 @@ class MockDatabase {
     return event;
   }
 
-  // Opportunity Persistence & Pipeline
+  // 5. Opportunity Persistence & Pipeline
   public async getTenantOpportunities(tenantId: string): Promise<OpportunityData[]> {
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
         const list = await prisma.opportunity.findMany({
           where: { tenantId },
           include: { contact: true },
           orderBy: { createdAt: 'desc' },
         });
 
-        if (list.length > 0) {
-          return list.map((o) => ({
-            id: o.id,
-            tenantId: o.tenantId,
-            stageId: o.stageId,
-            contactId: o.contactId,
-            title: o.title,
-            value: o.value,
-            status: o.status as any,
-            createdAt: o.createdAt.toISOString(),
-            contactName: o.contact?.name,
-          }));
-        }
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma getTenantOpportunities error:', (e as any).message);
+        return list.map((o) => ({
+          id: o.id,
+          tenantId: o.tenantId,
+          stageId: o.stageId,
+          contactId: o.contactId,
+          title: o.title,
+          value: o.value,
+          status: o.status as any,
+          createdAt: o.createdAt.toISOString(),
+          contactName: o.contact?.name,
+        }));
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getTenantOpportunities error:', e.message);
+        throw new Error(`Database query failed for opportunities: ${e.message}`);
       }
     }
 
@@ -644,11 +693,12 @@ class MockDatabase {
 
     if (process.env.DATABASE_URL) {
       try {
-        // Ensure Pipeline and PipelineStage exist in DB
+        await this.ensureTenantDatabaseSeeded(input.tenantId);
+
         let pipeline = await prisma.pipeline.findFirst({ where: { tenantId: input.tenantId } });
         if (!pipeline) {
           pipeline = await prisma.pipeline.create({
-            data: { tenantId: input.tenantId, name: 'Default Pipeline', isDefault: true },
+            data: { id: `pipe_${input.tenantId}`, tenantId: input.tenantId, name: 'Default Pipeline', isDefault: true },
           });
         }
 
@@ -672,8 +722,9 @@ class MockDatabase {
         });
         opp.id = created.id;
         opp.stageId = created.stageId;
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma Opportunity create error:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] Opportunity create error:', e.message);
+        throw new Error(`Database Opportunity creation failed: ${e.message}`);
       }
     }
 
@@ -681,14 +732,145 @@ class MockDatabase {
     return opp;
   }
 
-  // Workflows & Speed-to-Lead Auto-Seeder
+  // 6. Move Opportunity in PostgreSQL
+  public async moveOpportunity(input: {
+    tenantId: string;
+    opportunityId: string;
+    targetStageId: string;
+    userId?: string;
+  }): Promise<{
+    success: boolean;
+    opportunity?: OpportunityData;
+    event?: PlatformEventData;
+    executions?: WorkflowExecutionData[];
+    error?: string;
+  }> {
+    const { tenantId, opportunityId, targetStageId, userId = 'user_client_admin' } = input;
+
+    let opp: OpportunityData | undefined = undefined;
+
+    if (process.env.DATABASE_URL) {
+      try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
+        const found = await prisma.opportunity.findUnique({
+          where: { id: opportunityId },
+          include: { contact: true },
+        });
+
+        if (found) {
+          if (found.tenantId !== tenantId) {
+            return { success: false, error: 'Unauthorized: Opportunity does not belong to specified tenant' };
+          }
+
+          const previousStageId = found.stageId;
+
+          const updated = await prisma.opportunity.update({
+            where: { id: opportunityId },
+            data: {
+              stageId: targetStageId,
+              updatedAt: new Date(),
+            },
+            include: { contact: true },
+          });
+
+          opp = {
+            id: updated.id,
+            tenantId: updated.tenantId,
+            contactId: updated.contactId,
+            stageId: updated.stageId,
+            title: updated.title,
+            value: updated.value,
+            status: updated.status as any,
+            createdAt: updated.createdAt.toISOString(),
+            contactName: updated.contact?.name,
+          };
+
+          await prisma.auditLog.create({
+            data: {
+              tenantId,
+              userId,
+              action: 'OPPORTUNITY_STAGE_CHANGED',
+              details: JSON.stringify({
+                opportunityId,
+                contactId: updated.contactId,
+                previousStage: previousStageId,
+                newStage: targetStageId,
+              }),
+            },
+          });
+        }
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] moveOpportunity error:', e.message);
+        throw new Error(`Database moveOpportunity failed: ${e.message}`);
+      }
+    }
+
+    if (!opp) {
+      const existingInMemory = this.opportunities.get(opportunityId);
+      if (!existingInMemory || existingInMemory.tenantId !== tenantId) {
+        return { success: false, error: 'Opportunity not found or access denied' };
+      }
+      const previousStageId = existingInMemory.stageId;
+      existingInMemory.stageId = targetStageId;
+      opp = existingInMemory;
+
+      this.auditLogs.unshift({
+        id: `audit_opp_${Date.now()}`,
+        tenantId,
+        userId,
+        action: 'OPPORTUNITY_STAGE_CHANGED',
+        details: { opportunityId, contactId: opp.contactId, previousStage: previousStageId, newStage: targetStageId },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const { EventBus } = await import('./events/eventBus');
+
+    const { event, executions } = await EventBus.publish({
+      tenantId,
+      eventType: 'OPPORTUNITY_STAGE_CHANGED',
+      source: 'PIPELINE_UI',
+      payload: {
+        opportunityId: opp.id,
+        contactId: opp.contactId,
+        previousStageId: opp.stageId,
+        newStageId: targetStageId,
+        changedByUserId: userId,
+        title: opp.title,
+        value: opp.value,
+      },
+    });
+
+    if (targetStageId === 'stage_completed' || targetStageId === 'JOB_COMPLETED') {
+      const jobCompletedRes = await EventBus.publish({
+        tenantId,
+        eventType: 'JOB_COMPLETED',
+        source: 'PIPELINE_UI',
+        payload: {
+          opportunityId: opp.id,
+          contactId: opp.contactId,
+          changedByUserId: userId,
+          title: opp.title,
+          value: opp.value,
+        },
+      });
+      executions.push(...jobCompletedRes.executions);
+    }
+
+    return { success: true, opportunity: opp, event, executions };
+  }
+
+  // 7. Workflows & Execution Persistence
   public async getTenantWorkflows(tenantId: string): Promise<WorkflowData[]> {
     let list = Array.from(this.workflows.values()).filter((w) => w.tenantId === tenantId);
 
-    // Auto-seed Speed-to-Lead workflow if not present
     if (list.length === 0) {
       const speedLeadWf = this.ensureSpeedToLeadWorkflow(tenantId);
-      list = [speedLeadWf];
+      const reviewWf = this.ensureReviewRequestWorkflow(tenantId);
+      list = [speedLeadWf, reviewWf];
+    } else if (!list.some((w) => w.name.includes('Review Request'))) {
+      const reviewWf = this.ensureReviewRequestWorkflow(tenantId);
+      list.push(reviewWf);
     }
 
     return list;
@@ -893,137 +1075,10 @@ class MockDatabase {
     return workflow;
   }
 
-  public async moveOpportunity(input: {
-    tenantId: string;
-    opportunityId: string;
-    targetStageId: string;
-    userId?: string;
-  }): Promise<{
-    success: boolean;
-    opportunity?: OpportunityData;
-    event?: PlatformEventData;
-    executions?: WorkflowExecutionData[];
-    error?: string;
-  }> {
-    const { tenantId, opportunityId, targetStageId, userId = 'user_client_admin' } = input;
-
-    let opp: OpportunityData | undefined = undefined;
-
-    if (process.env.DATABASE_URL) {
-      try {
-        const found = await prisma.opportunity.findUnique({
-          where: { id: opportunityId },
-          include: { contact: true },
-        });
-
-        if (found) {
-          if (found.tenantId !== tenantId) {
-            return { success: false, error: 'Unauthorized: Opportunity does not belong to specified tenant' };
-          }
-
-          const previousStageId = found.stageId;
-
-          const updated = await prisma.opportunity.update({
-            where: { id: opportunityId },
-            data: {
-              stageId: targetStageId,
-              updatedAt: new Date(),
-            },
-            include: { contact: true },
-          });
-
-          opp = {
-            id: updated.id,
-            tenantId: updated.tenantId,
-            contactId: updated.contactId,
-            stageId: updated.stageId,
-            title: updated.title,
-            value: updated.value,
-            status: updated.status as any,
-            createdAt: updated.createdAt.toISOString(),
-            contactName: updated.contact?.name,
-          };
-
-          await prisma.auditLog.create({
-            data: {
-              tenantId,
-              userId,
-              action: 'OPPORTUNITY_STAGE_CHANGED',
-              details: JSON.stringify({
-                opportunityId,
-                contactId: updated.contactId,
-                previousStage: previousStageId,
-                newStage: targetStageId,
-              }),
-            },
-          });
-        }
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma moveOpportunity fallback:', (e as any).message);
-      }
-    }
-
-    if (!opp) {
-      const existingInMemory = this.opportunities.get(opportunityId);
-      if (!existingInMemory || existingInMemory.tenantId !== tenantId) {
-        return { success: false, error: 'Opportunity not found or access denied' };
-      }
-      const previousStageId = existingInMemory.stageId;
-      existingInMemory.stageId = targetStageId;
-      opp = existingInMemory;
-
-      this.auditLogs.unshift({
-        id: `audit_opp_${Date.now()}`,
-        tenantId,
-        userId,
-        action: 'OPPORTUNITY_STAGE_CHANGED',
-        details: { opportunityId, contactId: opp.contactId, previousStage: previousStageId, newStage: targetStageId },
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    const { EventBus } = await import('./events/eventBus');
-
-    // Emit OPPORTUNITY_STAGE_CHANGED
-    const { event, executions } = await EventBus.publish({
-      tenantId,
-      eventType: 'OPPORTUNITY_STAGE_CHANGED',
-      source: 'PIPELINE_UI',
-      payload: {
-        opportunityId: opp.id,
-        contactId: opp.contactId,
-        previousStageId: opp.stageId,
-        newStageId: targetStageId,
-        changedByUserId: userId,
-        title: opp.title,
-        value: opp.value,
-      },
-    });
-
-    // Emit JOB_COMPLETED if moved to stage_completed
-    if (targetStageId === 'stage_completed' || targetStageId === 'JOB_COMPLETED') {
-      const jobCompletedRes = await EventBus.publish({
-        tenantId,
-        eventType: 'JOB_COMPLETED',
-        source: 'PIPELINE_UI',
-        payload: {
-          opportunityId: opp.id,
-          contactId: opp.contactId,
-          changedByUserId: userId,
-          title: opp.title,
-          value: opp.value,
-        },
-      });
-      executions.push(...jobCompletedRes.executions);
-    }
-
-    return { success: true, opportunity: opp, event, executions };
-  }
-
-  // Workflow Execution Persistence & Run Counts
   public async saveWorkflowExecution(execution: WorkflowExecutionData): Promise<void> {
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(execution.tenantId);
         await prisma.workflowExecution.create({
           data: {
             id: execution.id,
@@ -1050,14 +1105,13 @@ class MockDatabase {
             },
           },
         });
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma saveWorkflowExecution error:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] saveWorkflowExecution error:', e.message);
       }
     }
 
     this.executions.unshift(execution);
 
-    // Update run stats on workflow object
     const wf = this.workflows.get(execution.workflowId);
     if (wf) {
       wf.runsCount = (wf.runsCount || 0) + 1;
@@ -1068,38 +1122,38 @@ class MockDatabase {
   public async getTenantExecutions(tenantId: string): Promise<WorkflowExecutionData[]> {
     if (process.env.DATABASE_URL) {
       try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
         const list = await prisma.workflowExecution.findMany({
           where: { tenantId },
           include: { steps: true },
           orderBy: { startedAt: 'desc' },
         });
 
-        if (list.length > 0) {
-          return list.map((e) => ({
-            id: e.id,
-            tenantId: e.tenantId,
-            workflowId: e.workflowId,
-            workflowVersionId: e.workflowVersionId,
-            eventId: e.eventId,
-            contactId: e.contactId || undefined,
-            status: e.status as any,
-            skippedReason: e.skippedReason || undefined,
-            startedAt: e.startedAt.toISOString(),
-            completedAt: e.completedAt?.toISOString(),
-            steps: e.steps.map((s) => ({
-              id: s.id,
-              nodeId: s.nodeId,
-              nodeType: s.nodeType,
-              nodeName: s.nodeName,
-              status: s.status as any,
-              evaluatedCondition: s.evaluatedCondition ?? undefined,
-              outputData: JSON.parse(s.outputData || '{}'),
-              executedAt: s.executedAt.toISOString(),
-            })),
-          }));
-        }
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma getTenantExecutions error:', (e as any).message);
+        return list.map((e) => ({
+          id: e.id,
+          tenantId: e.tenantId,
+          workflowId: e.workflowId,
+          workflowVersionId: e.workflowVersionId,
+          eventId: e.eventId,
+          contactId: e.contactId || undefined,
+          status: e.status as any,
+          skippedReason: e.skippedReason || undefined,
+          startedAt: e.startedAt.toISOString(),
+          completedAt: e.completedAt?.toISOString(),
+          steps: e.steps.map((s) => ({
+            id: s.id,
+            nodeId: s.nodeId,
+            nodeType: s.nodeType,
+            nodeName: s.nodeName,
+            status: s.status as any,
+            evaluatedCondition: s.evaluatedCondition ?? undefined,
+            outputData: JSON.parse(s.outputData || '{}'),
+            executedAt: s.executedAt.toISOString(),
+          })),
+        }));
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getTenantExecutions error:', e.message);
+        throw new Error(`Database query failed for workflow executions: ${e.message}`);
       }
     }
 
@@ -1113,8 +1167,8 @@ class MockDatabase {
           where: { workflowId },
         });
         return count;
-      } catch (e) {
-        console.warn('[DB_WARN] Prisma execution count error:', (e as any).message);
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] getWorkflowExecutionCount error:', e.message);
       }
     }
 
