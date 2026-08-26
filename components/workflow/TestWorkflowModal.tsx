@@ -19,14 +19,18 @@ export const TestWorkflowModal: React.FC<TestWorkflowModalProps> = ({ isOpen, on
 
   if (!isOpen || !workflow || !version) return null;
 
-  const handleRunSimulation = () => {
-    const contact = db.contacts.get(selectedContactId) || { name: 'John Doe', email: 'john@example.com', phone: '+19195550144' };
+  const handleRunSimulation = async () => {
+    const contact = db.contacts.get(selectedContactId) || {
+      name: 'Simulated Customer',
+      email: 'customer@example.com',
+      phone: '(919) 555-0144',
+    };
 
-    const simulatedEvent = {
+    const simulatedEvent: PlatformEventData = {
       id: `evt_sim_${Date.now()}`,
       tenantId: workflow.tenantId,
-      eventType: version.triggerConfig.eventType,
-      source: 'SIMULATED_TEST_RUNNER',
+      eventType: version.triggerConfig.eventType || 'FORM_SUBMITTED',
+      source: 'TEST_SIMULATOR',
       payload: {
         contactId: (contact as any).id || 'contact_john_doe',
         name: contact.name,
@@ -39,7 +43,7 @@ export const TestWorkflowModal: React.FC<TestWorkflowModalProps> = ({ isOpen, on
       createdAt: new Date().toISOString(),
     };
 
-    const res = executeWorkflowInstance({
+    const res = await executeWorkflowInstance({
       tenantId: workflow.tenantId,
       workflow,
       version,
