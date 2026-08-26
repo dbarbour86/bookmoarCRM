@@ -409,13 +409,57 @@ class MockDatabase {
     return Array.from(this.websiteIntegrations.values()).filter((i) => i.tenantId === tenantId);
   }
 
-  public rotatePublicSiteKey(tenantId: string, integrationId: string): WebsiteIntegrationData | null {
+  public async rotatePublicSiteKey(tenantId: string, integrationId: string): Promise<WebsiteIntegrationData | null> {
+    const randomSuffix = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const newKey = `public_${tenantId.replace('tenant_', '')}_${randomSuffix}`;
+    const now = new Date();
+
+    if (process.env.DATABASE_URL) {
+      try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
+        const updated = await prisma.websiteIntegration.update({
+          where: { id: integrationId },
+          data: {
+            publicSiteKey: newKey,
+            updatedAt: now,
+          },
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            tenantId,
+            userId: 'user_master_admin',
+            action: 'PUBLIC_SITE_KEY_ROTATED',
+            details: JSON.stringify({ integrationId, newKey }),
+          },
+        });
+
+        console.log(`[PERSISTENCE] entity=WebsiteIntegration tenantId=${tenantId} operation=ROTATE_KEY newKey=${newKey} source=POSTGRESQL success=true`);
+
+        const res: WebsiteIntegrationData = {
+          id: updated.id,
+          tenantId: updated.tenantId,
+          name: updated.name,
+          publicSiteKey: updated.publicSiteKey,
+          status: updated.status as any,
+          allowedDomains: JSON.parse(updated.allowedDomains || '[]'),
+          lastEventReceivedAt: updated.lastEventReceivedAt?.toISOString(),
+          createdAt: updated.createdAt.toISOString(),
+          updatedAt: updated.updatedAt.toISOString(),
+        };
+        this.websiteIntegrations.set(res.id, res);
+        return res;
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] rotatePublicSiteKey failed:', e.message);
+        throw new Error(`Database site key rotation failed: ${e.message}`);
+      }
+    }
+
     const integration = this.websiteIntegrations.get(integrationId);
     if (!integration || integration.tenantId !== tenantId) return null;
 
-    const randomSuffix = Math.random().toString(36).substring(2, 10).toUpperCase();
-    integration.publicSiteKey = `public_${tenantId.replace('tenant_', '')}_${randomSuffix}`;
-    integration.updatedAt = new Date().toISOString();
+    integration.publicSiteKey = newKey;
+    integration.updatedAt = now.toISOString();
 
     this.auditLogs.unshift({
       id: `audit_rot_${Date.now()}`,
@@ -423,7 +467,7 @@ class MockDatabase {
       userId: 'user_master_admin',
       action: 'PUBLIC_SITE_KEY_ROTATED',
       details: { integrationId, newKey: integration.publicSiteKey },
-      timestamp: new Date().toISOString(),
+      timestamp: now.toISOString(),
     });
 
     return integration;
@@ -554,6 +598,8 @@ class MockDatabase {
           customFields: JSON.parse(newDbContact.customFields || '{}'),
           createdAt: newDbContact.createdAt.toISOString(),
         };
+
+        console.log(`[PERSISTENCE] entity=Contact tenantId=${tenantId} operation=CREATE contactId=${resContact.id} source=POSTGRESQL success=true`);
 
         this.contacts.set(resContact.id, resContact);
         return resContact;
@@ -814,6 +860,8 @@ class MockDatabase {
               }),
             },
           });
+
+          console.log(`[PERSISTENCE] entity=Opportunity tenantId=${tenantId} operation=MOVE opportunityId=${opportunityId} targetStageId=${targetStageId} source=POSTGRESQL success=true`);
         }
       } catch (e: any) {
         console.error('[DATABASE_ERROR] moveOpportunity error:', e.message);
@@ -1493,6 +1541,8 @@ class MockDatabase {
           timestamp: dbAudit.timestamp.toISOString(),
         };
 
+        console.log(`[PERSISTENCE] entity=ClientTenant tenantId=${tenantId} operation=UPDATE serviceStatus=${serviceStatus} masterAutomationEnabled=${dbTenant.masterAutomationEnabled} source=POSTGRESQL success=true`);
+
         this.tenants.set(updatedTenant.id, updatedTenant);
         this.auditLogs.unshift(auditLogEntry);
 
@@ -1722,6 +1772,8 @@ class MockDatabase {
           details: JSON.stringify({ entityType, action, id: resultData?.id }),
         },
       });
+
+      console.log(`[PERSISTENCE] entity=${entityType} tenantId=${tenantId} operation=${action} recordId=${resultData?.id || 'N/A'} source=POSTGRESQL success=true`);
 
       return { success: true, data: resultData };
     } catch (e: any) {
