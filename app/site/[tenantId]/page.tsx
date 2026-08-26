@@ -3,8 +3,7 @@
 import React, { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { db } from '@/lib/db';
-import { EventBus } from '@/lib/events/eventBus';
-import { ShieldCheck, AlertTriangle, Send, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Send, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 
 export default function ClientWebsitePage() {
   const params = useParams();
@@ -15,45 +14,76 @@ export default function ClientWebsitePage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [vehicle, setVehicle] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionStatus, setSubmissionStatus] = useState<{
     success: boolean;
-    mode: 'ACTIVE_CRM' | 'FALLBACK_BASIC';
+    httpStatus?: number;
     message: string;
+    submissionId?: string;
+    contactId?: string;
   } | null>(null);
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tenant) return;
+    setIsSubmitting(true);
+    setSubmissionStatus(null);
 
-    // Check Tenant Service State
-    if (tenant.serviceStatus === 'ACTIVE' && tenant.masterAutomationEnabled) {
-      // Live Book Moar Managed CRM Processing
-      EventBus.publish({
-        tenantId,
-        eventType: 'FORM_SUBMITTED',
-        source: 'CLIENT_WEBSITE',
-        payload: {
-          contactId: 'contact_john_doe',
-          name,
-          email,
-          phone,
-          vehicle,
-          formName: 'Website Quote Form',
+    const siteKey = 'public_tyrees_4K8A9B2C';
+    const payload = {
+      siteKey,
+      formType: 'quote',
+      eventId: `site_evt_${Date.now()}`,
+      contact: {
+        name,
+        email,
+        phone,
+      },
+      fields: {
+        vehicle,
+      },
+    };
+
+    try {
+      const response = await fetch('/api/public/forms/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Site-Key': siteKey,
         },
+        body: JSON.stringify(payload),
       });
 
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setSubmissionStatus({
+          success: true,
+          httpStatus: response.status,
+          message: `Thank you, ${name}! Your quote request was received and saved in Book Moar CRM.`,
+          submissionId: data.submissionId,
+          contactId: data.contactId,
+        });
+
+        // Reset form inputs
+        setName('');
+        setEmail('');
+        setPhone('');
+        setVehicle('');
+      } else {
+        setSubmissionStatus({
+          success: false,
+          httpStatus: response.status,
+          message: data.error || 'Public API rejected form submission',
+        });
+      }
+    } catch (err: any) {
       setSubmissionStatus({
-        success: true,
-        mode: 'ACTIVE_CRM',
-        message: 'Thank you! Your quote request was received and processed by Book Moar Managed CRM & Speed-to-Lead Automations.',
+        success: false,
+        httpStatus: 500,
+        message: err.message || 'Database connection unavailable',
       });
-    } else {
-      // Portable / Basic Form Delivery Fallback (Prevents silent form failure)
-      setSubmissionStatus({
-        success: true,
-        mode: 'FALLBACK_BASIC',
-        message: 'Your message was delivered via Basic Portable Form Delivery! (Note: Managed CRM Workflows are currently suspended/disconnected).',
-      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -113,7 +143,7 @@ export default function ClientWebsitePage() {
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="John Doe"
+                placeholder="Production Test 002"
                 className="w-full p-3 border rounded-xl"
               />
             </div>
@@ -126,7 +156,7 @@ export default function ClientWebsitePage() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="john@example.com"
+                  placeholder="productiontest002@example.com"
                   className="w-full p-3 border rounded-xl"
                 />
               </div>
@@ -138,7 +168,7 @@ export default function ClientWebsitePage() {
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="(919) 555-0199"
+                  placeholder="9195550197"
                   className="w-full p-3 border rounded-xl"
                 />
               </div>
@@ -151,37 +181,56 @@ export default function ClientWebsitePage() {
                 required
                 value={vehicle}
                 onChange={(e) => setVehicle(e.target.value)}
-                placeholder="2023 Tesla Model 3"
+                placeholder="2024 Ford F-150"
                 className="w-full p-3 border rounded-xl"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-3.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="w-full py-3.5 bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              <Send className="w-4 h-4" />
-              Submit Quote Request
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Submitting to Book Moar Public API...
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  Submit Quote Request
+                </>
+              )}
             </button>
           </form>
 
           {submissionStatus && (
             <div
               className={`p-4 rounded-xl text-xs font-semibold space-y-1 ${
-                submissionStatus.mode === 'ACTIVE_CRM'
+                submissionStatus.success
                   ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
-                  : 'bg-amber-50 border border-amber-300 text-amber-900'
+                  : 'bg-rose-50 border border-rose-300 text-rose-900'
               }`}
             >
               <div className="flex items-center gap-2 font-bold text-sm">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                {submissionStatus.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
                 <span>
-                  {submissionStatus.mode === 'ACTIVE_CRM'
-                    ? 'Processed by Book Moar Managed CRM'
-                    : 'Basic Form Delivery Fallback Active'}
+                  {submissionStatus.success
+                    ? 'Form Submission Saved in CRM'
+                    : `Submission Failed (${submissionStatus.httpStatus})`}
                 </span>
               </div>
               <p>{submissionStatus.message}</p>
+              {submissionStatus.submissionId && (
+                <div className="text-[11px] font-mono text-emerald-700 pt-1">
+                  Submission ID: {submissionStatus.submissionId} &bull; Contact ID: {submissionStatus.contactId}
+                </div>
+              )}
             </div>
           )}
         </div>

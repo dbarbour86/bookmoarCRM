@@ -1,4 +1,4 @@
-// Enhanced Database Interface with PostgreSQL-backed Website Integrations, Idempotency, and Form Submissions
+import { prisma } from './prisma';
 
 export interface TenantData {
   id: string;
@@ -25,7 +25,7 @@ export interface WebsiteIntegrationData {
   name: string;
   publicSiteKey: string;
   status: 'ACTIVE' | 'DISABLED';
-  allowedDomains: string[]; // origins or domains
+  allowedDomains: string[];
   lastEventReceivedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -35,7 +35,7 @@ export interface IdempotencyRecordData {
   id: string;
   tenantId: string;
   eventId: string;
-  responseHash: string; // Cached JSON response string
+  responseHash: string;
   createdAt: string;
 }
 
@@ -218,7 +218,6 @@ class MockDatabase {
   }
 
   private seed() {
-    // 1. Primary Demo Tenant
     const tyreeTenant: TenantData = {
       id: 'tenant_tyrees_auto',
       name: "Tyree's Auto Detailing",
@@ -260,7 +259,6 @@ class MockDatabase {
     this.tenants.set(tyreeTenant.id, tyreeTenant);
     this.tenants.set(apexTenant.id, apexTenant);
 
-    // Seed Website Integrations
     const tyreeSite: WebsiteIntegrationData = {
       id: 'integration_tyrees_primary',
       tenantId: 'tenant_tyrees_auto',
@@ -288,7 +286,6 @@ class MockDatabase {
     this.websiteIntegrations.set(tyreeSite.id, tyreeSite);
     this.websiteIntegrations.set(apexSite.id, apexSite);
 
-    // Seed Pipeline Stages
     this.pipelineStages.set('tenant_tyrees_auto', [
       { id: 'stage_lead_in', name: 'New Lead', order: 1 },
       { id: 'stage_contacted', name: 'Contacted / Estimate Sent', order: 2 },
@@ -297,7 +294,6 @@ class MockDatabase {
       { id: 'stage_review_sent', name: 'Review Requested', order: 5 },
     ]);
 
-    // Seed Contacts
     const c1: ContactData = {
       id: 'contact_john_doe',
       tenantId: 'tenant_tyrees_auto',
@@ -312,8 +308,31 @@ class MockDatabase {
     this.contacts.set(c1.id, c1);
   }
 
-  // Integration Lookup & Management
-  public findIntegrationBySiteKey(siteKey: string): WebsiteIntegrationData | undefined {
+  // Database / Storage Methods with Prisma PostgreSQL Auto-Sync
+  public async findIntegrationBySiteKey(siteKey: string): Promise<WebsiteIntegrationData | undefined> {
+    if (process.env.DATABASE_URL) {
+      try {
+        const found = await prisma.websiteIntegration.findUnique({
+          where: { publicSiteKey: siteKey },
+        });
+        if (found) {
+          return {
+            id: found.id,
+            tenantId: found.tenantId,
+            name: found.name,
+            publicSiteKey: found.publicSiteKey,
+            status: found.status as 'ACTIVE' | 'DISABLED',
+            allowedDomains: JSON.parse(found.allowedDomains || '[]'),
+            lastEventReceivedAt: found.lastEventReceivedAt?.toISOString(),
+            createdAt: found.createdAt.toISOString(),
+            updatedAt: found.updatedAt.toISOString(),
+          };
+        }
+      } catch (e) {
+        console.warn('[DB_WARN] Prisma lookup failed, falling back to memory:', (e as any).message);
+      }
+    }
+
     return Array.from(this.websiteIntegrations.values()).find((i) => i.publicSiteKey === siteKey);
   }
 
@@ -341,9 +360,32 @@ class MockDatabase {
     return integration;
   }
 
-  // Database-backed Persistent Idempotency Helper (tenantId + eventId)
-  public checkAndRecordIdempotency(tenantId: string, eventId?: string, responsePayload?: Record<string, any>): { isDuplicate: boolean; cachedResponse?: any } {
+  public async checkAndRecordIdempotency(tenantId: string, eventId?: string, responsePayload?: Record<string, any>): Promise<{ isDuplicate: boolean; cachedResponse?: any }> {
     if (!eventId) return { isDuplicate: false };
+
+    if (process.env.DATABASE_URL) {
+      try {
+        const existing = await prisma.idempotencyRecord.findUnique({
+          where: { tenantId_eventId: { tenantId, eventId } },
+        });
+        if (existing) {
+          return { isDuplicate: true, cachedResponse: JSON.parse(existing.responseHash) };
+        }
+
+        if (responsePayload) {
+          await prisma.idempotencyRecord.create({
+            data: {
+              tenantId,
+              eventId,
+              responseHash: JSON.stringify(responsePayload),
+            },
+          });
+        }
+        return { isDuplicate: false };
+      } catch (e) {
+        console.warn('[DB_WARN] Prisma idempotency error:', (e as any).message);
+      }
+    }
 
     const key = `${tenantId}:${eventId}`;
     const existing = this.idempotencyRecords.get(key);
@@ -365,16 +407,102 @@ class MockDatabase {
     return { isDuplicate: false };
   }
 
-  // Contact Deduplication (Matches Phone or Email)
-  public findOrCreateContactByPhoneOrEmail(
+  public async findOrCreateContactByPhoneOrEmail(
     tenantId: string,
     contactInput: { firstName?: string; lastName?: string; name?: string; phone?: string; email?: string; fields?: Record<string, any> }
-  ): ContactData {
+  ): Promise<ContactData> {
     const fullName = contactInput.name || `${contactInput.firstName || ''} ${contactInput.lastName || ''}`.trim() || 'New Lead';
     const cleanPhone = (contactInput.phone || '').replace(/[^0-9+]/g, '');
     const cleanEmail = (contactInput.email || '').toLowerCase().trim();
 
-    // Check for existing matching contact
+    // Check PostgreSQL via Prisma if DATABASE_URL is set
+    if (process.env.DATABASE_URL) {
+      try {
+        // Ensure tenant exists in DB first
+        const existingTenant = await prisma.clientTenant.findUnique({ where: { id: tenantId } });
+        if (!existingTenant) {
+          await prisma.clientTenant.create({
+            data: {
+              id: tenantId,
+              name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : 'Client Tenant',
+              domain: 'tyreesautodetailing.com',
+            },
+          });
+        }
+
+        const existingPrismaContact = await prisma.contact.findFirst({
+          where: {
+            tenantId,
+            OR: [
+              ...(cleanPhone ? [{ phone: cleanPhone }] : []),
+              ...(cleanEmail ? [{ email: cleanEmail }] : []),
+            ],
+          },
+        });
+
+        if (existingPrismaContact) {
+          const updated = await prisma.contact.update({
+            where: { id: existingPrismaContact.id },
+            data: {
+              name: fullName !== 'New Lead' ? fullName : existingPrismaContact.name,
+              email: cleanEmail || existingPrismaContact.email,
+              phone: cleanPhone || existingPrismaContact.phone,
+              customFields: JSON.stringify({
+                ...JSON.parse(existingPrismaContact.customFields || '{}'),
+                ...(contactInput.fields || {}),
+              }),
+            },
+          });
+
+          const resContact: ContactData = {
+            id: updated.id,
+            tenantId: updated.tenantId,
+            name: updated.name,
+            email: updated.email || '',
+            phone: updated.phone || '',
+            status: updated.status as any,
+            tags: JSON.parse(updated.tags || '[]'),
+            customFields: JSON.parse(updated.customFields || '{}'),
+            createdAt: updated.createdAt.toISOString(),
+          };
+
+          this.contacts.set(resContact.id, resContact);
+          return resContact;
+        }
+
+        // Create in Prisma PostgreSQL
+        const newDbContact = await prisma.contact.create({
+          data: {
+            tenantId,
+            name: fullName,
+            email: cleanEmail || 'customer@example.com',
+            phone: cleanPhone || '+19195550199',
+            status: 'LEAD',
+            tags: JSON.stringify(['Website Lead']),
+            customFields: JSON.stringify(contactInput.fields || {}),
+          },
+        });
+
+        const resContact: ContactData = {
+          id: newDbContact.id,
+          tenantId: newDbContact.tenantId,
+          name: newDbContact.name,
+          email: newDbContact.email || '',
+          phone: newDbContact.phone || '',
+          status: newDbContact.status as any,
+          tags: JSON.parse(newDbContact.tags || '[]'),
+          customFields: JSON.parse(newDbContact.customFields || '{}'),
+          createdAt: newDbContact.createdAt.toISOString(),
+        };
+
+        this.contacts.set(resContact.id, resContact);
+        return resContact;
+      } catch (e) {
+        console.warn('[DB_WARN] Prisma contact persistence fallback to memory:', (e as any).message);
+      }
+    }
+
+    // In-memory fallback
     const existing = Array.from(this.contacts.values()).find(
       (c) =>
         c.tenantId === tenantId &&
@@ -392,7 +520,6 @@ class MockDatabase {
       return existing;
     }
 
-    // Create New Contact
     const newContact: ContactData = {
       id: `contact_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       tenantId,
@@ -409,7 +536,35 @@ class MockDatabase {
     return newContact;
   }
 
-  // Workflow Helpers
+  public async getTenantContacts(tenantId: string): Promise<ContactData[]> {
+    if (process.env.DATABASE_URL) {
+      try {
+        const list = await prisma.contact.findMany({
+          where: { tenantId },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (list.length > 0) {
+          return list.map((c) => ({
+            id: c.id,
+            tenantId: c.tenantId,
+            name: c.name,
+            email: c.email || '',
+            phone: c.phone || '',
+            status: c.status as any,
+            tags: JSON.parse(c.tags || '[]'),
+            customFields: JSON.parse(c.customFields || '{}'),
+            createdAt: c.createdAt.toISOString(),
+          }));
+        }
+      } catch (e) {
+        console.warn('[DB_WARN] Prisma getTenantContacts fallback:', (e as any).message);
+      }
+    }
+
+    return Array.from(this.contacts.values()).filter((c) => c.tenantId === tenantId);
+  }
+
   public getTenantWorkflows(tenantId: string): WorkflowData[] {
     return Array.from(this.workflows.values()).filter((w) => w.tenantId === tenantId);
   }
