@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tyree's Auto Detailing — Standalone Test Website</title>
+  <style>
+    :root { --primary: #0284c7; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 20px; line-height: 1.5; }
+    .container { max-width: 600px; margin: 40px auto; background: #fff; padding: 30px; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); }
+    h1 { font-size: 1.5rem; color: #0f172a; margin-top: 0; }
+    p { color: #64748b; font-size: 0.9rem; margin-bottom: 20px; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; font-size: 0.8rem; font-weight: bold; margin-bottom: 5px; color: #334155; }
+    input, select, textarea { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box; }
+    button { width: 100%; background: var(--primary); color: #fff; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 0.95rem; margin-top: 10px; }
+    button:hover { background: #0369a1; }
+    .badge { display: inline-block; padding: 4px 10px; background: #e0f2fe; color: #0369a1; border-radius: 999px; font-size: 0.75rem; font-weight: bold; margin-bottom: 15px; }
+    .status-box { margin-top: 20px; padding: 15px; border-radius: 8px; font-size: 0.85rem; display: none; }
+    .status-box.success { display: block; background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+    .status-box.error { display: block; background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .config-bar { background: #f1f5f9; padding: 10px; border-radius: 8px; margin-bottom: 20px; font-size: 0.75rem; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <span class="badge">PROOF-OF-CONCEPT STANDALONE WEBSITE</span>
+    <h1>Tyree's Auto Detailing</h1>
+    <p>Request a free detailing quote. This website is hosted on an independent origin and communicates via Book Moar's public HTTPS API gateway.</p>
+
+    <div class="config-bar">
+      <div><strong>API Endpoint:</strong> <span id="apiEndpointDisplay">http://localhost:4040/api/public/forms/submit</span></div>
+      <div><strong>Public Site Key:</strong> public_tyrees_4K8A9B2C</div>
+    </div>
+
+    <form id="standaloneQuoteForm">
+      <div class="form-group">
+        <label for="firstName">First Name</label>
+        <input type="text" id="firstName" name="firstName" required value="Derek">
+      </div>
+
+      <div class="form-group">
+        <label for="lastName">Last Name</label>
+        <input type="text" id="lastName" name="lastName" required value="Barbour">
+      </div>
+
+      <div class="form-group">
+        <label for="phone">Phone Number</label>
+        <input type="tel" id="phone" name="phone" required value="9195551234">
+      </div>
+
+      <div class="form-group">
+        <label for="email">Email Address</label>
+        <input type="email" id="email" name="email" required value="customer@example.com">
+      </div>
+
+      <div class="form-group">
+        <label for="service">Requested Service</label>
+        <select id="service" name="service">
+          <option value="Full Detail">Full Interior & Exterior Detail</option>
+          <option value="Ceramic Coating">Ceramic Coating Protection</option>
+          <option value="Express Wash">Express Wash & Vacuum</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="message">Message / Notes</label>
+        <textarea id="message" name="message" rows="3">I would like a full detail quote for my vehicle.</textarea>
+      </div>
+
+      <button type="submit" id="submitBtn">Submit Quote Request via Public API &rarr;</button>
+
+      <div id="statusBox" class="status-box"></div>
+    </form>
+  </div>
+
+  <script>
+    const BOOK_MOAR_API_URL = "http://localhost:4040/api/public/forms/submit";
+    const PUBLIC_SITE_KEY = "public_tyrees_4K8A9B2C";
+
+    document.getElementById('standaloneQuoteForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const statusBox = document.getElementById('statusBox');
+      const submitBtn = document.getElementById('submitBtn');
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = "Submitting to Book Moar Public API...";
+      statusBox.className = 'status-box';
+      statusBox.style.display = 'none';
+
+      const payload = {
+        siteKey: PUBLIC_SITE_KEY,
+        formType: 'quote',
+        eventId: 'site_evt_' + Date.now(),
+        contact: {
+          firstName: document.getElementById('firstName').value,
+          lastName: document.getElementById('lastName').value,
+          phone: document.getElementById('phone').value,
+          email: document.getElementById('email').value,
+        },
+        fields: {
+          service: document.getElementById('service').value,
+          message: document.getElementById('message').value,
+        }
+      };
+
+      try {
+        const response = await fetch(BOOK_MOAR_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Site-Key': PUBLIC_SITE_KEY,
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          statusBox.className = 'status-box success';
+          statusBox.innerHTML = `<strong>Quote Request Received!</strong><br>` +
+            `Submission ID: <code>${data.submissionId}</code><br>` +
+            `Contact ID: <code>${data.contactId}</code><br>` +
+            `<em>Book Moar CRM and Speed-to-Lead automations triggered successfully.</em>`;
+        } else {
+          throw new Error(data.error || 'API response error');
+        }
+      } catch (err) {
+        statusBox.className = 'status-box error';
+        statusBox.innerHTML = `<strong>Submission Failed:</strong> ${err.message}`;
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = "Submit Quote Request via Public API →";
+      }
+    });
+  </script>
+</body>
+</html>

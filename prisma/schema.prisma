@@ -1,0 +1,329 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model ClientTenant {
+  id                      String   @id @default(uuid())
+  name                    String
+  domain                  String
+  serviceStatus           String   @default("ACTIVE") // ACTIVE, SUSPENDED, TERMINATED
+  plan                    String   @default("Grow")
+  masterAutomationEnabled Boolean  @default(true)
+  smsEnabled              Boolean  @default(true)
+  emailEnabled            Boolean  @default(true)
+  crmWriteEnabled         Boolean  @default(true)
+  missedCallEnabled       Boolean  @default(true)
+  reviewsEnabled          Boolean  @default(true)
+  phoneConfig             String   @default("{}")
+  emailConfig             String   @default("{}")
+  websiteConfig           String   @default("{}")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  users                   User[]
+  contacts                Contact[]
+  pipelines               Pipeline[]
+  opportunities           Opportunity[]
+  appointments            Appointment[]
+  estimates               Estimate[]
+  invoices                Invoice[]
+  conversations           Conversation[]
+  workflows               Workflow[]
+  events                  PlatformEvent[]
+  integrations            IntegrationConnection[]
+  websiteIntegrations     WebsiteIntegration[]
+  formSubmissions         FormSubmission[]
+  idempotencyRecords      IdempotencyRecord[]
+  executions              WorkflowExecution[]
+  waitStates              WorkflowWaitState[]
+}
+
+model WebsiteIntegration {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  name                String   @default("Primary Website")
+  publicSiteKey       String   @unique
+  status              String   @default("ACTIVE") // ACTIVE, DISABLED
+  allowedDomains      String   @default("[\"*\"]") // JSON array of allowed origins/domains
+  lastEventReceivedAt DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant          ClientTenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  formSubmissions FormSubmission[]
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(uuid())
+  tenantId     String
+  eventId      String
+  responseHash String   @default("{}") // Cached JSON response payload
+  createdAt    DateTime @default(now())
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, eventId])
+}
+
+model FormSubmission {
+  id            String   @id @default(uuid())
+  tenantId      String
+  integrationId String
+  contactId     String
+  formType      String   @default("quote")
+  payload       String   @default("{}") // JSON submission payload
+  createdAt     DateTime @default(now())
+
+  tenant      ClientTenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration WebsiteIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  contact     Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  name      String
+  email     String   @unique
+  role      String   @default("CLIENT_ADMIN") // MASTER_ADMIN, CLIENT_ADMIN, CLIENT_STAFF
+  createdAt DateTime @default(now())
+
+  tenant ClientTenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model PlatformEvent {
+  id        String   @id @default(uuid())
+  tenantId  String
+  eventType String   // e.g. FORM_SUBMITTED, LEAD_CREATED, MISSED_CALL, APPOINTMENT_BOOKED
+  source    String   // WEBSITE, CRM, WEBHOOK, SYSTEM
+  payload   String   @default("{}")
+  createdAt DateTime @default(now())
+
+  tenant     ClientTenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executions WorkflowExecution[]
+}
+
+model Contact {
+  id           String   @id @default(uuid())
+  tenantId     String
+  name         String
+  email        String?
+  phone        String?
+  status       String   @default("LEAD") // LEAD, CUSTOMER, ARCHIVED
+  tags         String   @default("[]") // JSON array
+  customFields String   @default("{}") // JSON object
+  ownerId      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant          ClientTenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  opportunities   Opportunity[]
+  appointments    Appointment[]
+  estimates       Estimate[]
+  invoices        Invoice[]
+  conversations   Conversation[]
+  formSubmissions FormSubmission[]
+}
+
+model Pipeline {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  isDefault Boolean  @default(false)
+
+  tenant ClientTenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stages PipelineStage[]
+}
+
+model PipelineStage {
+  id         String   @id @default(uuid())
+  pipelineId String
+  name       String
+  order      Int
+
+  pipeline      Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  opportunities Opportunity[]
+}
+
+model Opportunity {
+  id        String   @id @default(uuid())
+  tenantId  String
+  stageId   String
+  contactId String
+  title     String
+  value     Float    @default(0)
+  status    String   @default("OPEN") // OPEN, WON, LOST
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  ClientTenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stage   PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  contact Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model Appointment {
+  id        String   @id @default(uuid())
+  tenantId  String
+  contactId String
+  service   String
+  startTime DateTime
+  endTime   DateTime
+  status    String   @default("booked") // booked, confirmed, rescheduled, completed, no_show, canceled
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model Estimate {
+  id        String   @id @default(uuid())
+  tenantId  String
+  contactId String
+  amount    Float
+  status    String   @default("created") // created, sent, accepted, declined
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model Invoice {
+  id        String   @id @default(uuid())
+  tenantId  String
+  contactId String
+  amount    Float
+  status    String   @default("created") // created, paid, overdue, failed
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model Conversation {
+  id            String   @id @default(uuid())
+  tenantId      String
+  contactId     String
+  channel       String   @default("SMS") // SMS, EMAIL, INTERNAL
+  lastMessageAt DateTime @default(now())
+
+  tenant   ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact  Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages Message[]
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String
+  sender         String   // CUSTOMER, SYSTEM, USER
+  body           String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+model Workflow {
+  id              String   @id @default(uuid())
+  tenantId        String
+  name            String
+  description     String?
+  status          String   @default("ACTIVE") // ACTIVE, DRAFT, DISABLED
+  activeVersionId String?
+  draftVersionId  String?
+  runsCount       Int      @default(0)
+  lastRunAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant     ClientTenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  versions   WorkflowVersion[]
+  executions WorkflowExecution[]
+}
+
+model WorkflowVersion {
+  id            String   @id @default(uuid())
+  workflowId    String
+  versionNumber Int
+  status        String   @default("DRAFT") // DRAFT, PUBLISHED, ARCHIVED
+  triggerConfig String   // JSON
+  nodesConfig   String   // JSON
+  edgesConfig   String   // JSON
+  createdAt     DateTime @default(now())
+
+  workflow   Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  executions WorkflowExecution[]
+}
+
+model IntegrationConnection {
+  id        String   @id @default(uuid())
+  tenantId  String
+  provider  String   // TWILIO, SENDGRID, STRIPE, GOOGLE_MY_BUSINESS, CUSTOM_WEBHOOK
+  config    String   // JSON
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  userId    String
+  action    String
+  details   String   @default("{}") // JSON
+  timestamp DateTime @default(now())
+}
+
+model WorkflowExecution {
+  id                String    @id @default(uuid())
+  tenantId          String
+  workflowId        String
+  workflowVersionId String
+  eventId           String
+  contactId         String?
+  status            String    @default("RUNNING") // RUNNING, WAITING, COMPLETED, FAILED, CANCELLED, BLOCKED
+  skippedReason     String?
+  startedAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  tenant          ClientTenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflow        Workflow              @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowVersion WorkflowVersion       @relation(fields: [workflowVersionId], references: [id], onDelete: Cascade)
+  event           PlatformEvent         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  steps           WorkflowExecutionStep[]
+  waitStates      WorkflowWaitState[]
+}
+
+model WorkflowExecutionStep {
+  id                 String   @id @default(uuid())
+  executionId        String
+  nodeId             String
+  nodeType           String
+  nodeName           String
+  status             String   @default("EXECUTED") // EXECUTED, SKIPPED, FAILED
+  evaluatedCondition Boolean?
+  outputData         String?  // JSON
+  executedAt         DateTime @default(now())
+
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+}
+
+model WorkflowWaitState {
+  id                     String   @id @default(uuid())
+  executionId            String
+  nodeId                 String
+  tenantId               String
+  contactId              String?
+  resumeAt               DateTime
+  cancellationConditions String   @default("[]") // JSON array
+  status                 String   @default("PENDING") // PENDING, RESUMED, CANCELLED
+
+  tenant    ClientTenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+}
