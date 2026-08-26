@@ -52,7 +52,8 @@ export default function WorkflowsPage() {
       }
     } catch (err) {
       console.warn('[WORKFLOW_FETCH_ERR] Fallback:', err);
-      setWorkflows(db.getTenantWorkflows(tenantId));
+      const fallbackWfs = await db.getTenantWorkflows(tenantId);
+      setWorkflows(fallbackWfs);
       setExecutions(db.executions.filter((e) => e.tenantId === tenantId));
     }
   }, [tenantId]);
