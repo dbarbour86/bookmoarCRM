@@ -1,64 +1,10 @@
-// Comprehensive Verification Suite for Business Configuration, Isolation & Pipeline Stage Transitions
+// Comprehensive Verification Suite for Business Configuration CRUD & Persistence
 
-const tenants = new Map();
+const { db } = require('../lib/db');
 
-const tyreesConfig = {
-  profile: {
-    tenantId: 'tenant_tyrees_auto',
-    businessName: "Tyree's Auto Detailing",
-    industry: 'Auto Detailing',
-    serviceType: 'Mobile',
-  },
-  services: [
-    { name: 'Full Detail', pricingType: 'FIXED', basePrice: 250 },
-    { name: 'Interior Detail', pricingType: 'FIXED', basePrice: 150 },
-    { name: 'Ceramic Coating', pricingType: 'STARTING_AT', basePrice: 900 },
-  ],
-  leadFields: [
-    { key: 'vehicleYear', label: 'Vehicle Year', fieldType: 'NUMBER' },
-    { key: 'vehicleMake', label: 'Vehicle Make', fieldType: 'TEXT' },
-    { key: 'vehicleModel', label: 'Vehicle Model', fieldType: 'TEXT' },
-  ],
-  pipelineStages: [
-    { name: 'New Lead', stageType: 'NEW' },
-    { name: 'Contacted / Estimate Sent', stageType: 'QUOTED' },
-    { name: 'Appointment Booked', stageType: 'BOOKED' },
-    { name: 'Job Completed', stageType: 'COMPLETED' },
-    { name: 'Review Requested', stageType: 'PAID' },
-  ],
-};
-
-const apexConfig = {
-  profile: {
-    tenantId: 'tenant_apex_lawn',
-    businessName: 'Apex Lawn & Care',
-    industry: 'Lawn & Landscaping',
-    serviceType: 'Physical Location',
-  },
-  services: [
-    { name: 'Lawn Mowing', pricingType: 'HOURLY', basePrice: 45 },
-    { name: 'Yard Cleanup', pricingType: 'STARTING_AT', basePrice: 150 },
-    { name: 'Mulch Installation', pricingType: 'CUSTOM_QUOTE', basePrice: 0 },
-  ],
-  leadFields: [
-    { key: 'propertyAddress', label: 'Property Address', fieldType: 'ADDRESS' },
-    { key: 'lotSize', label: 'Lot Size (Acres)', fieldType: 'NUMBER' },
-  ],
-  pipelineStages: [
-    { name: 'New Lead', stageType: 'NEW' },
-    { name: 'Inspection Scheduled', stageType: 'BOOKED' },
-    { name: 'Estimate Sent', stageType: 'QUOTED' },
-    { name: 'In Progress', stageType: 'IN_PROGRESS' },
-    { name: 'Completed', stageType: 'COMPLETED' },
-  ],
-};
-
-tenants.set('tenant_tyrees_auto', tyreesConfig);
-tenants.set('tenant_apex_lawn', apexConfig);
-
-async function runBusinessConfigVerificationTests() {
+async function runBusinessConfigCrudVerificationTests() {
   console.log('===========================================================');
-  console.log('BOOK MOAR TENANT BUSINESS CONFIGURATION & ISOLATION TESTS');
+  console.log('BOOK MOAR BUSINESS CONFIGURATION CRUD & PERSISTENCE TESTS');
   console.log('===========================================================');
 
   let passed = 0;
@@ -74,38 +20,55 @@ async function runBusinessConfigVerificationTests() {
     }
   }
 
-  // 1. Fetch Tyree's Business Config
-  const tyrees = tenants.get('tenant_tyrees_auto');
-  assert(tyrees.profile.industry === 'Auto Detailing', "1. Tyree's profile industry is Auto Detailing");
+  const tenantId = 'tenant_tyrees_auto';
+
+  // 1. Initial Config
+  const initialConfig = await db.getTenantBusinessConfig(tenantId);
+  assert(initialConfig.profile.industry === 'Auto Detailing', "1. Profile loaded for Tyree's Auto Detailing");
+
+  // 2. Create Service
+  const newServiceRes = await db.mutateBusinessConfig({
+    tenantId,
+    entityType: 'SERVICE',
+    action: 'CREATE',
+    data: {
+      name: 'Engine Bay Detail',
+      category: 'Detailing',
+      pricingType: 'FIXED',
+      basePrice: 95,
+      durationMinutes: 45,
+      bookingMode: 'INSTANT_BOOK',
+    },
+  });
+  assert(newServiceRes.success === true, '2. Create Service mutation succeeded');
+
+  // 3. Verify Created Service in Config
+  const updatedConfig1 = await db.getTenantBusinessConfig(tenantId);
   assert(
-    tyrees.services.some((s) => s.name === 'Full Detail' && s.pricingType === 'FIXED'),
-    "2. Tyree's services include Full Detail ($250 FIXED)"
-  );
-  assert(
-    tyrees.leadFields.some((f) => f.key === 'vehicleYear' || f.key === 'vehicleMake'),
-    "3. Tyree's intake fields include vehicleYear / vehicleMake"
+    updatedConfig1.services.some((s) => s.name === 'Engine Bay Detail' && s.basePrice === 95),
+    '3. Engine Bay Detail service persisted in tenant configuration'
   );
 
-  // 2. Fetch Apex Lawn & Care Business Config
-  const apex = tenants.get('tenant_apex_lawn');
-  assert(apex.profile.industry === 'Lawn & Landscaping', '4. Apex profile industry is Lawn & Landscaping');
-  assert(
-    apex.services.some((s) => s.name === 'Lawn Mowing' && s.pricingType === 'HOURLY'),
-    '5. Apex services include Lawn Mowing (HOURLY)'
-  );
-  assert(
-    apex.leadFields.some((f) => f.key === 'propertyAddress' || f.key === 'lotSize'),
-    '6. Apex intake fields include propertyAddress / lotSize'
-  );
+  // 4. Create Lead Field
+  const newFieldRes = await db.mutateBusinessConfig({
+    tenantId,
+    entityType: 'LEAD_FIELD',
+    action: 'CREATE',
+    data: {
+      key: 'paintCondition',
+      label: 'Paint Oxidation Level',
+      fieldType: 'SELECT',
+      required: false,
+      options: ['None', 'Light Oxidation', 'Heavy Swirls / Scratches'],
+    },
+  });
+  assert(newFieldRes.success === true, '4. Create Lead Field mutation succeeded');
 
-  // 3. Verify Isolation Between Tenants
+  // 5. Verify Created Lead Field in Config
+  const updatedConfig2 = await db.getTenantBusinessConfig(tenantId);
   assert(
-    !apex.leadFields.some((f) => f.key === 'vehicleYear'),
-    '7. Isolation: Apex intake fields do NOT contain vehicle fields'
-  );
-  assert(
-    !tyrees.services.some((s) => s.name === 'Lawn Mowing'),
-    '8. Isolation: Tyrees services do NOT contain Lawn Mowing'
+    updatedConfig2.leadFields.some((f) => f.key === 'paintCondition'),
+    '5. Dynamic lead field paintCondition persisted in tenant intake definition'
   );
 
   console.log('===========================================================');
@@ -115,4 +78,4 @@ async function runBusinessConfigVerificationTests() {
   if (failed > 0) process.exit(1);
 }
 
-runBusinessConfigVerificationTests();
+runBusinessConfigCrudVerificationTests();

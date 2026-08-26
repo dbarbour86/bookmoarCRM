@@ -1375,6 +1375,212 @@ class MockDatabase {
     return await this.getTenantBusinessConfig(tenantId);
   }
 
+  public async mutateBusinessConfig(input: {
+    tenantId: string;
+    entityType: 'SERVICE' | 'PACKAGE' | 'ADDON' | 'LEAD_FIELD' | 'PIPELINE_STAGE' | 'PAYMENT_CONFIG' | 'SERVICE_AREA' | 'TEAM_MEMBER' | 'PROFILE';
+    action: 'CREATE' | 'UPDATE' | 'DELETE' | 'DISABLE' | 'SAVE';
+    data: any;
+    userId?: string;
+  }): Promise<{ success: boolean; data?: any; error?: string }> {
+    const { tenantId, entityType, action, data, userId = 'user_master_admin' } = input;
+
+    if (!process.env.DATABASE_URL && process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL is missing in production environment');
+    }
+
+    try {
+      await this.ensureTenantDatabaseSeeded(tenantId);
+
+      let resultData: any = null;
+
+      if (entityType === 'SERVICE') {
+        if (action === 'CREATE') {
+          resultData = await prisma.tenantService.create({
+            data: {
+              tenantId,
+              name: data.name,
+              description: data.description || '',
+              category: data.category || 'General',
+              status: data.status || 'ACTIVE',
+              pricingType: data.pricingType || 'FIXED',
+              basePrice: data.basePrice !== undefined && data.basePrice !== null ? Number(data.basePrice) : null,
+              durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null ? Number(data.durationMinutes) : null,
+              bookingMode: data.bookingMode || 'REQUEST_APPOINTMENT',
+              requiresDeposit: Boolean(data.requiresDeposit),
+              depositType: data.depositType || 'FIXED',
+              depositAmount: Number(data.depositAmount || 0),
+              taxable: data.taxable !== undefined ? Boolean(data.taxable) : true,
+              sortOrder: Number(data.sortOrder || 0),
+            },
+          });
+        } else if (action === 'UPDATE') {
+          resultData = await prisma.tenantService.update({
+            where: { id: data.id },
+            data: {
+              name: data.name,
+              description: data.description,
+              category: data.category,
+              status: data.status,
+              pricingType: data.pricingType,
+              basePrice: data.basePrice !== undefined && data.basePrice !== null ? Number(data.basePrice) : null,
+              durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null ? Number(data.durationMinutes) : null,
+              bookingMode: data.bookingMode,
+              requiresDeposit: Boolean(data.requiresDeposit),
+              depositType: data.depositType,
+              depositAmount: Number(data.depositAmount || 0),
+              taxable: Boolean(data.taxable),
+            },
+          });
+        } else if (action === 'DELETE' || action === 'DISABLE') {
+          resultData = await prisma.tenantService.update({
+            where: { id: data.id },
+            data: { status: 'INACTIVE' },
+          });
+        }
+      } else if (entityType === 'LEAD_FIELD') {
+        if (action === 'CREATE') {
+          resultData = await prisma.leadFieldDefinition.create({
+            data: {
+              tenantId,
+              key: data.key,
+              label: data.label,
+              fieldType: data.fieldType || 'TEXT',
+              required: Boolean(data.required),
+              placeholder: data.placeholder || '',
+              options: JSON.stringify(data.options || []),
+              sortOrder: Number(data.sortOrder || 0),
+              active: true,
+            },
+          });
+        } else if (action === 'UPDATE') {
+          resultData = await prisma.leadFieldDefinition.update({
+            where: { id: data.id },
+            data: {
+              label: data.label,
+              fieldType: data.fieldType,
+              required: Boolean(data.required),
+              placeholder: data.placeholder,
+              options: JSON.stringify(data.options || []),
+            },
+          });
+        } else if (action === 'DELETE') {
+          resultData = await prisma.leadFieldDefinition.delete({
+            where: { id: data.id },
+          });
+        }
+      } else if (entityType === 'PIPELINE_STAGE') {
+        if (action === 'CREATE') {
+          let pipeline = await prisma.pipeline.findFirst({ where: { tenantId } });
+          if (!pipeline) {
+            pipeline = await prisma.pipeline.create({
+              data: { tenantId, name: 'Default Pipeline', isDefault: true },
+            });
+          }
+          resultData = await prisma.pipelineStage.create({
+            data: {
+              pipelineId: pipeline.id,
+              name: data.name,
+              order: Number(data.order || 1),
+              stageType: data.stageType || 'CUSTOM',
+              color: data.color || '#0284c7',
+            },
+          });
+        } else if (action === 'UPDATE') {
+          resultData = await prisma.pipelineStage.update({
+            where: { id: data.id },
+            data: {
+              name: data.name,
+              order: Number(data.order || 1),
+              stageType: data.stageType,
+              color: data.color,
+            },
+          });
+        } else if (action === 'DELETE') {
+          const oppCount = await prisma.opportunity.count({ where: { stageId: data.id } });
+          if (oppCount > 0) {
+            return { success: false, error: `Cannot delete stage containing ${oppCount} active opportunity records` };
+          }
+          resultData = await prisma.pipelineStage.delete({ where: { id: data.id } });
+        }
+      } else if (entityType === 'PAYMENT_CONFIG') {
+        resultData = await prisma.paymentConfiguration.upsert({
+          where: { tenantId },
+          update: {
+            acceptedMethods: JSON.stringify(data.acceptedMethods || []),
+            paymentTiming: data.paymentTiming || 'DUE_AFTER_SERVICE',
+            notes: data.notes || '',
+          },
+          create: {
+            tenantId,
+            acceptedMethods: JSON.stringify(data.acceptedMethods || []),
+            paymentTiming: data.paymentTiming || 'DUE_AFTER_SERVICE',
+            notes: data.notes || '',
+          },
+        });
+      } else if (entityType === 'SERVICE_AREA') {
+        resultData = await prisma.serviceAreaConfig.upsert({
+          where: { tenantId },
+          update: {
+            areaType: data.areaType || 'ZIP_CODES',
+            values: JSON.stringify(data.values || []),
+            baseLocation: data.baseLocation || '',
+            radiusMiles: Number(data.radiusMiles || 25),
+          },
+          create: {
+            tenantId,
+            areaType: data.areaType || 'ZIP_CODES',
+            values: JSON.stringify(data.values || []),
+            baseLocation: data.baseLocation || '',
+            radiusMiles: Number(data.radiusMiles || 25),
+          },
+        });
+      } else if (entityType === 'TEAM_MEMBER') {
+        if (action === 'CREATE') {
+          resultData = await prisma.tenantMember.create({
+            data: {
+              tenantId,
+              name: data.name,
+              email: data.email || '',
+              phone: data.phone || '',
+              role: data.role || 'TECHNICIAN',
+              active: true,
+            },
+          });
+        } else if (action === 'UPDATE') {
+          resultData = await prisma.tenantMember.update({
+            where: { id: data.id },
+            data: {
+              name: data.name,
+              email: data.email,
+              phone: data.phone,
+              role: data.role,
+              active: Boolean(data.active),
+            },
+          });
+        } else if (action === 'DELETE' || action === 'DISABLE') {
+          resultData = await prisma.tenantMember.update({
+            where: { id: data.id },
+            data: { active: false },
+          });
+        }
+      }
+
+      await prisma.auditLog.create({
+        data: {
+          tenantId,
+          userId,
+          action: `BUSINESS_CONFIG_MUTATED_${entityType}_${action}`,
+          details: JSON.stringify({ entityType, action, id: resultData?.id }),
+        },
+      });
+
+      return { success: true, data: resultData };
+    } catch (e: any) {
+      console.error('[DATABASE_ERROR] mutateBusinessConfig failed:', e.message);
+      return { success: false, error: e.message || 'Database mutation failed' };
+    }
+  }
+
   public async getWorkflowExecutionCount(workflowId: string): Promise<number> {
     if (process.env.DATABASE_URL) {
       try {
