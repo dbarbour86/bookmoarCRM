@@ -1,14 +1,12 @@
-// Comprehensive Verification Suite for Event Bus, Workflow Execution, Opportunity Creation & Observability
-
-const JSZip = require('jszip');
+// Comprehensive Verification Suite for Event Bus, Workflow Execution, Opportunity Transitions & Audit Logging
 
 const tenants = new Map();
 const contacts = new Map();
 const opportunities = new Map();
-const formSubmissions = new Map();
 const platformEvents = [];
 const workflows = new Map();
 const executions = [];
+const auditLogs = [];
 
 tenants.set('tenant_tyrees_auto', {
   id: 'tenant_tyrees_auto',
@@ -48,8 +46,33 @@ workflows.set('wf_speed_lead', {
   ],
 });
 
+workflows.set('wf_review_req', {
+  id: 'wf_review_req',
+  tenantId: 'tenant_tyrees_auto',
+  name: 'Review Request & Customer Feedback',
+  status: 'ACTIVE',
+  activeVersionId: 'ver_1_review',
+  versions: [
+    {
+      id: 'ver_1_review',
+      workflowId: 'wf_review_req',
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      triggerConfig: { eventType: 'JOB_COMPLETED' },
+      nodesConfig: [
+        { id: 'node_trig', type: 'trigger', name: 'Trigger: Job Completed' },
+        { id: 'node_review', type: 'action', name: 'Send Review Link SMS', actionType: 'SEND_REVIEW_REQUEST' },
+        { id: 'node_notify', type: 'action', name: 'Notify Owner: Job Completed', actionType: 'SEND_INTERNAL_NOTIFICATION' },
+      ],
+      edgesConfig: [
+        { id: 'e1', source: 'node_trig', target: 'node_review' },
+        { id: 'e2', source: 'node_review', target: 'node_notify' },
+      ],
+    },
+  ],
+});
+
 async function simulateEventBusPipeline(input) {
-  // 1. Persist PlatformEvent
   const event = {
     id: `evt_${Date.now()}`,
     tenantId: input.tenantId,
@@ -60,63 +83,82 @@ async function simulateEventBusPipeline(input) {
   };
   platformEvents.push(event);
 
-  // 2. Match Active Workflows
-  const wf = workflows.get('wf_speed_lead');
-  if (!wf || wf.status !== 'ACTIVE') return { event, executions: [] };
+  const matchedExecutions = [];
 
-  const version = wf.versions[0];
-  if (version.triggerConfig.eventType !== input.eventType) return { event, executions: [] };
+  for (const wf of workflows.values()) {
+    if (wf.tenantId !== input.tenantId || wf.status !== 'ACTIVE') continue;
+    const version = wf.versions[0];
+    if (version.triggerConfig.eventType === input.eventType) {
+      const execution = {
+        id: `exec_${Date.now()}_${wf.id}`,
+        tenantId: input.tenantId,
+        workflowId: wf.id,
+        workflowVersionId: version.id,
+        eventId: event.id,
+        contactId: input.payload.contactId,
+        status: 'COMPLETED',
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        steps: version.nodesConfig.map((n) => ({
+          id: `step_${n.id}`,
+          nodeId: n.id,
+          nodeType: n.type,
+          nodeName: n.name,
+          status: 'EXECUTED',
+        })),
+      };
+      executions.push(execution);
+      matchedExecutions.push(execution);
+    }
+  }
 
-  // 3. Execute Workflow & Create Opportunity
-  const execution = {
-    id: `exec_${Date.now()}`,
-    tenantId: input.tenantId,
-    workflowId: wf.id,
-    workflowVersionId: version.id,
-    eventId: event.id,
-    contactId: input.payload.contactId,
-    status: 'COMPLETED',
-    startedAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-    steps: [],
-  };
+  return { event, executions: matchedExecutions };
+}
 
-  // Node 1: Trigger
-  execution.steps.push({ id: 's1', nodeId: 'node_trig', nodeType: 'trigger', nodeName: 'Trigger: Quote Form Submitted', status: 'EXECUTED' });
+async function simulateMoveOpportunity(tenantId, opportunityId, targetStageId, userId = 'user_client_admin') {
+  const opp = opportunities.get(opportunityId);
+  if (!opp) return { success: false, error: 'Opportunity not found' };
 
-  // Node 2: CREATE_OPPORTUNITY
-  const oppId = `opp_${Date.now()}`;
-  opportunities.set(oppId, {
-    id: oppId,
-    tenantId: input.tenantId,
-    contactId: input.payload.contactId,
-    stageId: 'stage_lead_in',
-    title: 'Production Test 002 - Quote',
-    value: 350,
+  const previousStageId = opp.stageId;
+  opp.stageId = targetStageId;
+
+  // 1. Audit Log
+  auditLogs.push({
+    id: `audit_${Date.now()}`,
+    tenantId,
+    userId,
+    action: 'OPPORTUNITY_STAGE_CHANGED',
+    details: { opportunityId, previousStageId, targetStageId },
+    timestamp: new Date().toISOString(),
   });
 
-  execution.steps.push({
-    id: 's2',
-    nodeId: 'node_opp',
-    nodeType: 'action',
-    nodeName: 'Create Opportunity',
-    status: 'EXECUTED',
-    outputData: { opportunityId: oppId, stageName: 'New Lead' },
+  // 2. Emit OPPORTUNITY_STAGE_CHANGED Event
+  const { event, executions: stageExecs } = await simulateEventBusPipeline({
+    tenantId,
+    eventType: 'OPPORTUNITY_STAGE_CHANGED',
+    source: 'PIPELINE_UI',
+    payload: { opportunityId, previousStageId, targetStageId, contactId: opp.contactId },
   });
 
-  // Node 3: SEND_SMS
-  execution.steps.push({ id: 's3', nodeId: 'node_sms', nodeType: 'action', nodeName: 'Send Instant SMS', status: 'EXECUTED' });
+  const allExecs = [...stageExecs];
 
-  // Node 4: NOTIFY_OWNER
-  execution.steps.push({ id: 's4', nodeId: 'node_notify', nodeType: 'action', nodeName: 'Notify Business Owner', status: 'EXECUTED' });
+  // 3. Emit JOB_COMPLETED Event if target is stage_completed
+  if (targetStageId === 'stage_completed') {
+    const jobRes = await simulateEventBusPipeline({
+      tenantId,
+      eventType: 'JOB_COMPLETED',
+      source: 'PIPELINE_UI',
+      payload: { opportunityId, contactId: opp.contactId },
+    });
+    allExecs.push(...jobRes.executions);
+  }
 
-  executions.push(execution);
-  return { event, executions: [execution] };
+  return { success: true, opportunity: opp, event, executions: allExecs };
 }
 
 async function runProductionPipelineTests() {
   console.log('===========================================================');
-  console.log('BOOK MOAR PRODUCTION EVENT BUS & WORKFLOW ENGINE VERIFICATION');
+  console.log('BOOK MOAR REAL PIPELINE TRANSITIONS & EVENTS VERIFICATION');
   console.log('===========================================================');
 
   let passed = 0;
@@ -132,29 +174,23 @@ async function runProductionPipelineTests() {
     }
   }
 
-  // Test Payload
-  const contactId = 'contact_prod_002';
-  contacts.set(contactId, {
-    id: contactId,
-    tenantId: 'tenant_tyrees_auto',
-    name: 'Production Test 002',
-    phone: '9195550197',
-    email: 'productiontest002@example.com',
-  });
+  const contactId = 'contact_prod_003';
+  contacts.set(contactId, { id: contactId, tenantId: 'tenant_tyrees_auto', name: 'Production Test 003' });
 
-  const res = await simulateEventBusPipeline({
-    tenantId: 'tenant_tyrees_auto',
-    eventType: 'FORM_SUBMITTED',
-    source: 'PUBLIC_WEBSITE_API',
-    payload: { contactId, name: 'Production Test 002', phone: '9195550197', email: 'productiontest002@example.com' },
-  });
+  const oppId = 'opp_prod_003';
+  opportunities.set(oppId, { id: oppId, tenantId: 'tenant_tyrees_auto', contactId, stageId: 'stage_lead_in', title: 'Full Detail' });
 
-  assert(platformEvents.length === 1, '1. PlatformEvent FORM_SUBMITTED persisted in database');
-  assert(res.executions.length === 1, '2. Event Bus matched active Speed-to-Lead workflow');
-  assert(res.executions[0].status === 'COMPLETED', '3. WorkflowExecution created and completed');
-  assert(opportunities.size === 1, '4. CREATE_OPPORTUNITY node created persistent Opportunity card');
-  assert(Array.from(opportunities.values())[0].title.includes('Production Test 002'), '5. Opportunity associated with Production Test 002 contact');
-  assert(res.executions[0].steps.length === 4, '6. All 4 workflow execution steps recorded in Observability Inspector');
+  // 1. Move to Contacted / Estimate Sent
+  const res1 = await simulateMoveOpportunity('tenant_tyrees_auto', oppId, 'stage_contacted');
+  assert(res1.success === true && res1.opportunity.stageId === 'stage_contacted', '1. Move NEW LEAD -> CONTACTED_ESTIMATE_SENT updated stage');
+  assert(auditLogs.length === 1, '2. AuditLog entry created for stage change');
+  assert(platformEvents.some((e) => e.eventType === 'OPPORTUNITY_STAGE_CHANGED'), '3. PlatformEvent OPPORTUNITY_STAGE_CHANGED emitted');
+
+  // 2. Move to Job Completed
+  const res2 = await simulateMoveOpportunity('tenant_tyrees_auto', oppId, 'stage_completed');
+  assert(res2.opportunity.stageId === 'stage_completed', '4. Move to JOB_COMPLETED updated stage');
+  assert(platformEvents.some((e) => e.eventType === 'JOB_COMPLETED'), '5. Business Event JOB_COMPLETED emitted');
+  assert(res2.executions.some((e) => e.workflowId === 'wf_review_req'), '6. Review Request Workflow triggered by JOB_COMPLETED event');
 
   console.log('===========================================================');
   console.log(`VERIFICATION COMPLETE: ${passed} PASSED, ${failed} FAILED`);

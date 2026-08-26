@@ -3,8 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { db, OpportunityData, PipelineStageData } from '@/lib/db';
-import { EventBus } from '@/lib/events/eventBus';
-import { LayoutGrid, MoveRight, DollarSign, User, RefreshCw, Loader2 } from 'lucide-react';
+import { LayoutGrid, MoveRight, DollarSign, User, RefreshCw, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export default function KanbanPipelinePage() {
   const params = useParams();
@@ -21,6 +20,8 @@ export default function KanbanPipelinePage() {
 
   const [opportunities, setOpportunities] = useState<OpportunityData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [movingOppId, setMovingOppId] = useState<string | null>(null);
+  const [statusNotification, setStatusNotification] = useState<{ success: boolean; message: string } | null>(null);
 
   const fetchOpportunities = useCallback(async () => {
     setIsLoading(true);
@@ -44,43 +45,56 @@ export default function KanbanPipelinePage() {
     fetchOpportunities();
   }, [fetchOpportunities]);
 
-  const handleMoveStage = async (oppId: string, targetStageId: string) => {
-    if (!tenant) return;
-
-    if (!tenant.crmWriteEnabled) {
-      alert('CRM Write capability is DISABLED for this tenant.');
+  const handleMoveStage = async (oppId: string, targetStageId: string, targetStageName: string) => {
+    if (tenant && !tenant.crmWriteEnabled) {
+      setStatusNotification({
+        success: false,
+        message: 'CRM Write capability is DISABLED for this tenant.',
+      });
       return;
     }
 
-    const opp = opportunities.find((o) => o.id === oppId);
-    if (!opp) return;
+    setMovingOppId(oppId);
+    setStatusNotification(null);
 
-    const oldStageId = opp.stageId;
-    opp.stageId = targetStageId;
+    try {
+      const res = await fetch(`/api/opportunities/${oppId}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId,
+          targetStage: targetStageId,
+          userId: 'user_client_admin',
+        }),
+      });
 
-    const targetStage = stages.find((s) => s.id === targetStageId);
+      const data = await res.json();
 
-    // Publish KANBAN_CARD_MOVED Event via Event Bus
-    await EventBus.publish({
-      tenantId,
-      eventType: 'KANBAN_CARD_MOVED',
-      source: 'CRM_PIPELINE',
-      payload: {
-        opportunityId: opp.id,
-        contactId: opp.contactId,
-        oldStageId,
-        newStageId: targetStageId,
-        newStageName: targetStage?.name,
-        title: opp.title,
-        value: opp.value,
-      },
-    });
-
-    fetchOpportunities();
+      if (res.ok && data.success) {
+        setStatusNotification({
+          success: true,
+          message: `Moved opportunity to stage "${targetStageName}". Events & Audit Logs created.`,
+        });
+        await fetchOpportunities();
+      } else {
+        setStatusNotification({
+          success: false,
+          message: data.error || 'Failed to move opportunity stage',
+        });
+      }
+    } catch (err: any) {
+      setStatusNotification({
+        success: false,
+        message: err.message || 'Error communicating with move API',
+      });
+    } finally {
+      setMovingOppId(null);
+    }
   };
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
@@ -101,6 +115,24 @@ export default function KanbanPipelinePage() {
           <span>Refresh Pipeline</span>
         </button>
       </div>
+
+      {/* Notification Toast */}
+      {statusNotification && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 transition ${
+            statusNotification.success
+              ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+              : 'bg-rose-50 border border-rose-300 text-rose-900'
+          }`}
+        >
+          {statusNotification.success ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          )}
+          <span>{statusNotification.message}</span>
+        </div>
+      )}
 
       {/* Kanban Grid */}
       {isLoading ? (
@@ -143,17 +175,22 @@ export default function KanbanPipelinePage() {
                         </div>
 
                         {/* Stage Move Controls */}
-                        <div className="pt-2 border-t flex flex-wrap gap-1">
+                        <div className="pt-2 border-t flex flex-col gap-1.5">
                           {stages
                             .filter((s) => s.id !== stage.id)
                             .map((nextStage) => (
                               <button
                                 key={nextStage.id}
-                                onClick={() => handleMoveStage(opp.id, nextStage.id)}
-                                className="text-[10px] font-semibold px-2 py-1 bg-slate-50 hover:bg-sky-50 text-slate-600 hover:text-sky-700 rounded border transition flex items-center gap-1"
+                                disabled={movingOppId === opp.id}
+                                onClick={() => handleMoveStage(opp.id, nextStage.id, nextStage.name)}
+                                className="text-[10px] font-semibold px-2 py-1 bg-slate-50 hover:bg-sky-50 text-slate-600 hover:text-sky-700 rounded border transition flex items-center justify-between disabled:opacity-50"
                               >
                                 <span>Move to {nextStage.name}</span>
-                                <MoveRight className="w-2.5 h-2.5" />
+                                {movingOppId === opp.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin text-sky-600" />
+                                ) : (
+                                  <MoveRight className="w-2.5 h-2.5" />
+                                )}
                               </button>
                             ))}
                         </div>

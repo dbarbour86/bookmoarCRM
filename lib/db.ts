@@ -851,6 +851,175 @@ class MockDatabase {
     return workflow;
   }
 
+  public ensureReviewRequestWorkflow(tenantId: string): WorkflowData {
+    const existing = Array.from(this.workflows.values()).find((w) => w.tenantId === tenantId && w.name.includes('Review Request'));
+    if (existing) return existing;
+
+    const id = `wf_review_req_${tenantId}`;
+    const versionId = `ver_1_${id}`;
+
+    const reviewVersion: WorkflowVersionData = {
+      id: versionId,
+      workflowId: id,
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      triggerConfig: { eventType: 'JOB_COMPLETED', filters: [] },
+      nodesConfig: [
+        { id: 'node_trig', type: 'trigger', name: 'Trigger: Job Completed', config: { eventType: 'JOB_COMPLETED' }, position: { x: 250, y: 50 } },
+        { id: 'node_review', type: 'action', name: 'Send Review Link SMS', actionType: 'SEND_REVIEW_REQUEST', config: { message: 'Hi {{contact.firstName}}, thanks for choosing {{business.name}}! How would you rate your service today? {{link}}' }, position: { x: 250, y: 180 } },
+        { id: 'node_notify', type: 'action', name: 'Notify Owner: Job Completed', actionType: 'SEND_INTERNAL_NOTIFICATION', position: { x: 250, y: 310 } },
+      ],
+      edgesConfig: [
+        { id: 'e1', source: 'node_trig', target: 'node_review' },
+        { id: 'e2', source: 'node_review', target: 'node_notify' },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+
+    const workflow: WorkflowData = {
+      id,
+      tenantId,
+      name: 'Review Request & Customer Feedback',
+      description: 'Triggered when a job is marked COMPLETED in pipeline. Sends review link and notifies owner.',
+      status: 'ACTIVE',
+      activeVersionId: versionId,
+      runsCount: 0,
+      versions: [reviewVersion],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.workflows.set(id, workflow);
+    return workflow;
+  }
+
+  public async moveOpportunity(input: {
+    tenantId: string;
+    opportunityId: string;
+    targetStageId: string;
+    userId?: string;
+  }): Promise<{
+    success: boolean;
+    opportunity?: OpportunityData;
+    event?: PlatformEventData;
+    executions?: WorkflowExecutionData[];
+    error?: string;
+  }> {
+    const { tenantId, opportunityId, targetStageId, userId = 'user_client_admin' } = input;
+
+    let opp: OpportunityData | undefined = undefined;
+
+    if (process.env.DATABASE_URL) {
+      try {
+        const found = await prisma.opportunity.findUnique({
+          where: { id: opportunityId },
+          include: { contact: true },
+        });
+
+        if (found) {
+          if (found.tenantId !== tenantId) {
+            return { success: false, error: 'Unauthorized: Opportunity does not belong to specified tenant' };
+          }
+
+          const previousStageId = found.stageId;
+
+          const updated = await prisma.opportunity.update({
+            where: { id: opportunityId },
+            data: {
+              stageId: targetStageId,
+              updatedAt: new Date(),
+            },
+            include: { contact: true },
+          });
+
+          opp = {
+            id: updated.id,
+            tenantId: updated.tenantId,
+            contactId: updated.contactId,
+            stageId: updated.stageId,
+            title: updated.title,
+            value: updated.value,
+            status: updated.status as any,
+            createdAt: updated.createdAt.toISOString(),
+            contactName: updated.contact?.name,
+          };
+
+          await prisma.auditLog.create({
+            data: {
+              tenantId,
+              userId,
+              action: 'OPPORTUNITY_STAGE_CHANGED',
+              details: JSON.stringify({
+                opportunityId,
+                contactId: updated.contactId,
+                previousStage: previousStageId,
+                newStage: targetStageId,
+              }),
+            },
+          });
+        }
+      } catch (e) {
+        console.warn('[DB_WARN] Prisma moveOpportunity fallback:', (e as any).message);
+      }
+    }
+
+    if (!opp) {
+      const existingInMemory = this.opportunities.get(opportunityId);
+      if (!existingInMemory || existingInMemory.tenantId !== tenantId) {
+        return { success: false, error: 'Opportunity not found or access denied' };
+      }
+      const previousStageId = existingInMemory.stageId;
+      existingInMemory.stageId = targetStageId;
+      opp = existingInMemory;
+
+      this.auditLogs.unshift({
+        id: `audit_opp_${Date.now()}`,
+        tenantId,
+        userId,
+        action: 'OPPORTUNITY_STAGE_CHANGED',
+        details: { opportunityId, contactId: opp.contactId, previousStage: previousStageId, newStage: targetStageId },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const { EventBus } = await import('./events/eventBus');
+
+    // Emit OPPORTUNITY_STAGE_CHANGED
+    const { event, executions } = await EventBus.publish({
+      tenantId,
+      eventType: 'OPPORTUNITY_STAGE_CHANGED',
+      source: 'PIPELINE_UI',
+      payload: {
+        opportunityId: opp.id,
+        contactId: opp.contactId,
+        previousStageId: opp.stageId,
+        newStageId: targetStageId,
+        changedByUserId: userId,
+        title: opp.title,
+        value: opp.value,
+      },
+    });
+
+    // Emit JOB_COMPLETED if moved to stage_completed
+    if (targetStageId === 'stage_completed' || targetStageId === 'JOB_COMPLETED') {
+      const jobCompletedRes = await EventBus.publish({
+        tenantId,
+        eventType: 'JOB_COMPLETED',
+        source: 'PIPELINE_UI',
+        payload: {
+          opportunityId: opp.id,
+          contactId: opp.contactId,
+          changedByUserId: userId,
+          title: opp.title,
+          value: opp.value,
+        },
+      });
+      executions.push(...jobCompletedRes.executions);
+    }
+
+    return { success: true, opportunity: opp, event, executions };
+  }
+
   // Workflow Execution Persistence & Run Counts
   public async saveWorkflowExecution(execution: WorkflowExecutionData): Promise<void> {
     if (process.env.DATABASE_URL) {
