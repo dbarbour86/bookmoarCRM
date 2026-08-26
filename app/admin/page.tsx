@@ -332,33 +332,22 @@ export default function MasterAdminPage() {
                 )}
 
                 {/* Actions */}
-                <div className="p-5 flex flex-wrap gap-2 items-center justify-between">
-                  <div className="flex flex-wrap gap-2">
-                    <Link
-                      href={`/client/${tenant.id}/crm`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200"
-                    >
-                      <Users className="w-3.5 h-3.5" />
-                      Open CRM
-                    </Link>
-
-                    <Link
-                      href={`/client/${tenant.id}/workflows`}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
-                    >
-                      <GitBranch className="w-3.5 h-3.5" />
-                      Workflows
-                    </Link>
-                  </div>
+                <div className="p-5 flex flex-wrap gap-3 items-center justify-between bg-slate-50/70 border-t border-slate-100">
+                  <Link
+                    href={`/client/${tenant.id}/crm`}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold bg-sky-600 hover:bg-sky-500 text-white shadow-md transition"
+                  >
+                    <Users className="w-4 h-4" />
+                    Manage Client &rarr;
+                  </Link>
 
                   <div className="flex flex-wrap gap-2 items-center">
-                    {/* Client Data Export CSV/ZIP Modal Button */}
                     <button
                       onClick={() => setExportModalTenant(tenant)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 transition"
                     >
                       <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                      Export Data (CSV/ZIP)
+                      Export Data
                     </button>
 
                     <button
@@ -366,10 +355,10 @@ export default function MasterAdminPage() {
                         setSelectedTenant(tenant);
                         setAuditReport(null);
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow transition"
                     >
                       <Download className="w-3.5 h-3.5 text-sky-400" />
-                      Export Website
+                      Export Bundle
                     </button>
                   </div>
                 </div>
