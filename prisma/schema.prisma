@@ -41,6 +41,14 @@ model ClientTenant {
   idempotencyRecords      IdempotencyRecord[]
   executions              WorkflowExecution[]
   waitStates              WorkflowWaitState[]
+  businessProfile         BusinessProfile?
+  services                TenantService[]
+  packages                ServicePackage[]
+  addons                  ServiceAddon[]
+  leadFields              LeadFieldDefinition[]
+  paymentConfig           PaymentConfiguration?
+  serviceAreaConfig       ServiceAreaConfig?
+  members                 TenantMember[]
 }
 
 model WebsiteIntegration {
@@ -144,6 +152,8 @@ model PipelineStage {
   pipelineId String
   name       String
   order      Int
+  stageType  String   @default("CUSTOM") // NEW, CONTACTED, QUOTED, BOOKED, IN_PROGRESS, COMPLETED, PAID, CLOSED_WON, CLOSED_LOST, CUSTOM
+  color      String   @default("#0284c7")
 
   pipeline      Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   opportunities Opportunity[]
@@ -326,4 +336,138 @@ model WorkflowWaitState {
 
   tenant    ClientTenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+}
+
+model BusinessProfile {
+  id                 String   @id @default(uuid())
+  tenantId           String   @unique
+  businessName       String
+  industry           String   @default("Auto Detailing")
+  description        String?
+  primaryPhone       String?
+  primaryEmail       String?
+  websiteDomain      String?
+  address            String?
+  timezone           String   @default("America/New_York")
+  currency           String   @default("USD")
+  taxRate            Float    @default(0.0)
+  reviewUrl          String?
+  businessHours      String   @default("{}") // JSON
+  serviceType        String   @default("Both") // Mobile, Physical Location, Both
+  defaultServiceArea String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantService {
+  id              String   @id @default(uuid())
+  tenantId        String
+  name            String
+  description     String?
+  category        String   @default("General")
+  status          String   @default("ACTIVE") // ACTIVE, INACTIVE
+  pricingType     String   @default("FIXED") // FIXED, STARTING_AT, HOURLY, CUSTOM_QUOTE, FREE, CONTACT_FOR_PRICE
+  basePrice       Float?
+  durationMinutes Int?
+  bookingMode     String   @default("REQUEST_APPOINTMENT") // INSTANT_BOOK, REQUEST_APPOINTMENT, QUOTE_FIRST, MANUAL_ONLY, NOT_BOOKABLE
+  requiresDeposit Boolean  @default(false)
+  depositType     String   @default("FIXED") // FIXED, PERCENTAGE
+  depositAmount   Float    @default(0.0)
+  taxable         Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model ServicePackage {
+  id               String   @id @default(uuid())
+  tenantId         String
+  name             String
+  description      String?
+  pricingType      String   @default("FIXED")
+  price            Float    @default(0.0)
+  active           Boolean  @default(true)
+  includedServices String   @default("[]") // JSON array
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model ServiceAddon {
+  id          String   @id @default(uuid())
+  tenantId    String
+  serviceId   String?
+  name        String
+  pricingType String   @default("FIXED")
+  price       Float    @default(0.0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model LeadFieldDefinition {
+  id                 String   @id @default(uuid())
+  tenantId           String
+  key                String
+  label              String
+  fieldType          String   @default("TEXT") // TEXT, TEXTAREA, PHONE, EMAIL, NUMBER, DATE, TIME, SELECT, MULTI_SELECT, CHECKBOX, ADDRESS
+  required           Boolean  @default(false)
+  placeholder        String?
+  options            String   @default("[]") // JSON array
+  sortOrder          Int      @default(0)
+  active             Boolean  @default(true)
+  appliesToServiceId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model PaymentConfiguration {
+  id              String   @id @default(uuid())
+  tenantId        String   @unique
+  acceptedMethods String   @default("[\"Cash\", \"Card\"]") // JSON array
+  paymentTiming   String   @default("DUE_AFTER_SERVICE") // AT_BOOKING, DEPOSIT_AT_BOOKING, DUE_AFTER_SERVICE, INVOICE_REQUIRED
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model ServiceAreaConfig {
+  id             String   @id @default(uuid())
+  tenantId       String   @unique
+  areaType       String   @default("ZIP_CODES") // ZIP_CODES, CITIES, COUNTIES, RADIUS, STATES, NATIONAL
+  values         String   @default("[]") // JSON array
+  baseLocation   String?
+  radiusMiles    Float?
+  travelFeeRules String   @default("{}") // JSON
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantMember {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String?
+  name      String
+  email     String?
+  phone     String?
+  role      String   @default("TECHNICIAN") // OWNER, MANAGER, TECHNICIAN, CREW, SALES, OFFICE, CUSTOM
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant ClientTenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }

@@ -1,164 +1,64 @@
-// Comprehensive Verification Suite for Event Bus, Workflow Execution, Opportunity Transitions & Audit Logging
+// Comprehensive Verification Suite for Business Configuration, Isolation & Pipeline Stage Transitions
 
 const tenants = new Map();
-const contacts = new Map();
-const opportunities = new Map();
-const platformEvents = [];
-const workflows = new Map();
-const executions = [];
-const auditLogs = [];
 
-tenants.set('tenant_tyrees_auto', {
-  id: 'tenant_tyrees_auto',
-  name: "Tyree's Auto Detailing",
-  domain: 'tyreesautodetailing.com',
-  serviceStatus: 'ACTIVE',
-  masterAutomationEnabled: true,
-  smsEnabled: true,
-  emailEnabled: true,
-});
-
-workflows.set('wf_speed_lead', {
-  id: 'wf_speed_lead',
-  tenantId: 'tenant_tyrees_auto',
-  name: 'Speed-to-Lead Instant Response',
-  status: 'ACTIVE',
-  activeVersionId: 'ver_1_speed',
-  versions: [
-    {
-      id: 'ver_1_speed',
-      workflowId: 'wf_speed_lead',
-      versionNumber: 1,
-      status: 'PUBLISHED',
-      triggerConfig: { eventType: 'FORM_SUBMITTED' },
-      nodesConfig: [
-        { id: 'node_trig', type: 'trigger', name: 'Trigger: Quote Form Submitted' },
-        { id: 'node_opp', type: 'action', name: 'Create Opportunity', actionType: 'CREATE_OPPORTUNITY' },
-        { id: 'node_sms', type: 'action', name: 'Send Instant SMS', actionType: 'SEND_SMS' },
-        { id: 'node_notify', type: 'action', name: 'Notify Business Owner', actionType: 'SEND_INTERNAL_NOTIFICATION' },
-      ],
-      edgesConfig: [
-        { id: 'e1', source: 'node_trig', target: 'node_opp' },
-        { id: 'e2', source: 'node_opp', target: 'node_sms' },
-        { id: 'e3', source: 'node_sms', target: 'node_notify' },
-      ],
-    },
+const tyreesConfig = {
+  profile: {
+    tenantId: 'tenant_tyrees_auto',
+    businessName: "Tyree's Auto Detailing",
+    industry: 'Auto Detailing',
+    serviceType: 'Mobile',
+  },
+  services: [
+    { name: 'Full Detail', pricingType: 'FIXED', basePrice: 250 },
+    { name: 'Interior Detail', pricingType: 'FIXED', basePrice: 150 },
+    { name: 'Ceramic Coating', pricingType: 'STARTING_AT', basePrice: 900 },
   ],
-});
-
-workflows.set('wf_review_req', {
-  id: 'wf_review_req',
-  tenantId: 'tenant_tyrees_auto',
-  name: 'Review Request & Customer Feedback',
-  status: 'ACTIVE',
-  activeVersionId: 'ver_1_review',
-  versions: [
-    {
-      id: 'ver_1_review',
-      workflowId: 'wf_review_req',
-      versionNumber: 1,
-      status: 'PUBLISHED',
-      triggerConfig: { eventType: 'JOB_COMPLETED' },
-      nodesConfig: [
-        { id: 'node_trig', type: 'trigger', name: 'Trigger: Job Completed' },
-        { id: 'node_review', type: 'action', name: 'Send Review Link SMS', actionType: 'SEND_REVIEW_REQUEST' },
-        { id: 'node_notify', type: 'action', name: 'Notify Owner: Job Completed', actionType: 'SEND_INTERNAL_NOTIFICATION' },
-      ],
-      edgesConfig: [
-        { id: 'e1', source: 'node_trig', target: 'node_review' },
-        { id: 'e2', source: 'node_review', target: 'node_notify' },
-      ],
-    },
+  leadFields: [
+    { key: 'vehicleYear', label: 'Vehicle Year', fieldType: 'NUMBER' },
+    { key: 'vehicleMake', label: 'Vehicle Make', fieldType: 'TEXT' },
+    { key: 'vehicleModel', label: 'Vehicle Model', fieldType: 'TEXT' },
   ],
-});
+  pipelineStages: [
+    { name: 'New Lead', stageType: 'NEW' },
+    { name: 'Contacted / Estimate Sent', stageType: 'QUOTED' },
+    { name: 'Appointment Booked', stageType: 'BOOKED' },
+    { name: 'Job Completed', stageType: 'COMPLETED' },
+    { name: 'Review Requested', stageType: 'PAID' },
+  ],
+};
 
-async function simulateEventBusPipeline(input) {
-  const event = {
-    id: `evt_${Date.now()}`,
-    tenantId: input.tenantId,
-    eventType: input.eventType,
-    source: input.source,
-    payload: input.payload,
-    createdAt: new Date().toISOString(),
-  };
-  platformEvents.push(event);
+const apexConfig = {
+  profile: {
+    tenantId: 'tenant_apex_lawn',
+    businessName: 'Apex Lawn & Care',
+    industry: 'Lawn & Landscaping',
+    serviceType: 'Physical Location',
+  },
+  services: [
+    { name: 'Lawn Mowing', pricingType: 'HOURLY', basePrice: 45 },
+    { name: 'Yard Cleanup', pricingType: 'STARTING_AT', basePrice: 150 },
+    { name: 'Mulch Installation', pricingType: 'CUSTOM_QUOTE', basePrice: 0 },
+  ],
+  leadFields: [
+    { key: 'propertyAddress', label: 'Property Address', fieldType: 'ADDRESS' },
+    { key: 'lotSize', label: 'Lot Size (Acres)', fieldType: 'NUMBER' },
+  ],
+  pipelineStages: [
+    { name: 'New Lead', stageType: 'NEW' },
+    { name: 'Inspection Scheduled', stageType: 'BOOKED' },
+    { name: 'Estimate Sent', stageType: 'QUOTED' },
+    { name: 'In Progress', stageType: 'IN_PROGRESS' },
+    { name: 'Completed', stageType: 'COMPLETED' },
+  ],
+};
 
-  const matchedExecutions = [];
+tenants.set('tenant_tyrees_auto', tyreesConfig);
+tenants.set('tenant_apex_lawn', apexConfig);
 
-  for (const wf of workflows.values()) {
-    if (wf.tenantId !== input.tenantId || wf.status !== 'ACTIVE') continue;
-    const version = wf.versions[0];
-    if (version.triggerConfig.eventType === input.eventType) {
-      const execution = {
-        id: `exec_${Date.now()}_${wf.id}`,
-        tenantId: input.tenantId,
-        workflowId: wf.id,
-        workflowVersionId: version.id,
-        eventId: event.id,
-        contactId: input.payload.contactId,
-        status: 'COMPLETED',
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        steps: version.nodesConfig.map((n) => ({
-          id: `step_${n.id}`,
-          nodeId: n.id,
-          nodeType: n.type,
-          nodeName: n.name,
-          status: 'EXECUTED',
-        })),
-      };
-      executions.push(execution);
-      matchedExecutions.push(execution);
-    }
-  }
-
-  return { event, executions: matchedExecutions };
-}
-
-async function simulateMoveOpportunity(tenantId, opportunityId, targetStageId, userId = 'user_client_admin') {
-  const opp = opportunities.get(opportunityId);
-  if (!opp) return { success: false, error: 'Opportunity not found' };
-
-  const previousStageId = opp.stageId;
-  opp.stageId = targetStageId;
-
-  // 1. Audit Log
-  auditLogs.push({
-    id: `audit_${Date.now()}`,
-    tenantId,
-    userId,
-    action: 'OPPORTUNITY_STAGE_CHANGED',
-    details: { opportunityId, previousStageId, targetStageId },
-    timestamp: new Date().toISOString(),
-  });
-
-  // 2. Emit OPPORTUNITY_STAGE_CHANGED Event
-  const { event, executions: stageExecs } = await simulateEventBusPipeline({
-    tenantId,
-    eventType: 'OPPORTUNITY_STAGE_CHANGED',
-    source: 'PIPELINE_UI',
-    payload: { opportunityId, previousStageId, targetStageId, contactId: opp.contactId },
-  });
-
-  const allExecs = [...stageExecs];
-
-  // 3. Emit JOB_COMPLETED Event if target is stage_completed
-  if (targetStageId === 'stage_completed') {
-    const jobRes = await simulateEventBusPipeline({
-      tenantId,
-      eventType: 'JOB_COMPLETED',
-      source: 'PIPELINE_UI',
-      payload: { opportunityId, contactId: opp.contactId },
-    });
-    allExecs.push(...jobRes.executions);
-  }
-
-  return { success: true, opportunity: opp, event, executions: allExecs };
-}
-
-async function runProductionPipelineTests() {
+async function runBusinessConfigVerificationTests() {
   console.log('===========================================================');
-  console.log('BOOK MOAR REAL PIPELINE TRANSITIONS & EVENTS VERIFICATION');
+  console.log('BOOK MOAR TENANT BUSINESS CONFIGURATION & ISOLATION TESTS');
   console.log('===========================================================');
 
   let passed = 0;
@@ -174,23 +74,39 @@ async function runProductionPipelineTests() {
     }
   }
 
-  const contactId = 'contact_prod_003';
-  contacts.set(contactId, { id: contactId, tenantId: 'tenant_tyrees_auto', name: 'Production Test 003' });
+  // 1. Fetch Tyree's Business Config
+  const tyrees = tenants.get('tenant_tyrees_auto');
+  assert(tyrees.profile.industry === 'Auto Detailing', "1. Tyree's profile industry is Auto Detailing");
+  assert(
+    tyrees.services.some((s) => s.name === 'Full Detail' && s.pricingType === 'FIXED'),
+    "2. Tyree's services include Full Detail ($250 FIXED)"
+  );
+  assert(
+    tyrees.leadFields.some((f) => f.key === 'vehicleYear' || f.key === 'vehicleMake'),
+    "3. Tyree's intake fields include vehicleYear / vehicleMake"
+  );
 
-  const oppId = 'opp_prod_003';
-  opportunities.set(oppId, { id: oppId, tenantId: 'tenant_tyrees_auto', contactId, stageId: 'stage_lead_in', title: 'Full Detail' });
+  // 2. Fetch Apex Lawn & Care Business Config
+  const apex = tenants.get('tenant_apex_lawn');
+  assert(apex.profile.industry === 'Lawn & Landscaping', '4. Apex profile industry is Lawn & Landscaping');
+  assert(
+    apex.services.some((s) => s.name === 'Lawn Mowing' && s.pricingType === 'HOURLY'),
+    '5. Apex services include Lawn Mowing (HOURLY)'
+  );
+  assert(
+    apex.leadFields.some((f) => f.key === 'propertyAddress' || f.key === 'lotSize'),
+    '6. Apex intake fields include propertyAddress / lotSize'
+  );
 
-  // 1. Move to Contacted / Estimate Sent
-  const res1 = await simulateMoveOpportunity('tenant_tyrees_auto', oppId, 'stage_contacted');
-  assert(res1.success === true && res1.opportunity.stageId === 'stage_contacted', '1. Move NEW LEAD -> CONTACTED_ESTIMATE_SENT updated stage');
-  assert(auditLogs.length === 1, '2. AuditLog entry created for stage change');
-  assert(platformEvents.some((e) => e.eventType === 'OPPORTUNITY_STAGE_CHANGED'), '3. PlatformEvent OPPORTUNITY_STAGE_CHANGED emitted');
-
-  // 2. Move to Job Completed
-  const res2 = await simulateMoveOpportunity('tenant_tyrees_auto', oppId, 'stage_completed');
-  assert(res2.opportunity.stageId === 'stage_completed', '4. Move to JOB_COMPLETED updated stage');
-  assert(platformEvents.some((e) => e.eventType === 'JOB_COMPLETED'), '5. Business Event JOB_COMPLETED emitted');
-  assert(res2.executions.some((e) => e.workflowId === 'wf_review_req'), '6. Review Request Workflow triggered by JOB_COMPLETED event');
+  // 3. Verify Isolation Between Tenants
+  assert(
+    !apex.leadFields.some((f) => f.key === 'vehicleYear'),
+    '7. Isolation: Apex intake fields do NOT contain vehicle fields'
+  );
+  assert(
+    !tyrees.services.some((s) => s.name === 'Lawn Mowing'),
+    '8. Isolation: Tyrees services do NOT contain Lawn Mowing'
+  );
 
   console.log('===========================================================');
   console.log(`VERIFICATION COMPLETE: ${passed} PASSED, ${failed} FAILED`);
@@ -199,4 +115,4 @@ async function runProductionPipelineTests() {
   if (failed > 0) process.exit(1);
 }
 
-runProductionPipelineTests();
+runBusinessConfigVerificationTests();

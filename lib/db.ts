@@ -1160,21 +1160,219 @@ class MockDatabase {
     return this.executions.filter((e) => e.tenantId === tenantId);
   }
 
-  public async getWorkflowExecutionCount(workflowId: string): Promise<number> {
+  public async getTenantBusinessConfig(tenantId: string): Promise<any> {
     if (process.env.DATABASE_URL) {
       try {
-        const count = await prisma.workflowExecution.count({
-          where: { workflowId },
-        });
-        return count;
+        await this.ensureTenantDatabaseSeeded(tenantId);
+        const profile = await prisma.businessProfile.findUnique({ where: { tenantId } });
+        const services = await prisma.tenantService.findMany({ where: { tenantId }, orderBy: { sortOrder: 'asc' } });
+        const packages = await prisma.servicePackage.findMany({ where: { tenantId }, orderBy: { sortOrder: 'asc' } });
+        const addons = await prisma.serviceAddon.findMany({ where: { tenantId } });
+        const leadFields = await prisma.leadFieldDefinition.findMany({ where: { tenantId }, orderBy: { sortOrder: 'asc' } });
+        const paymentConfig = await prisma.paymentConfiguration.findUnique({ where: { tenantId } });
+        const serviceArea = await prisma.serviceAreaConfig.findUnique({ where: { tenantId } });
+        const members = await prisma.tenantMember.findMany({ where: { tenantId } });
+        const pipeline = await prisma.pipeline.findFirst({ where: { tenantId }, include: { stages: { orderBy: { order: 'asc' } } } });
+
+        if (profile) {
+          return {
+            profile: {
+              ...profile,
+              businessHours: JSON.parse(profile.businessHours || '{}'),
+            },
+            services: services.map((s) => ({ ...s })),
+            packages: packages.map((p) => ({ ...p, includedServices: JSON.parse(p.includedServices || '[]') })),
+            addons: addons.map((a) => ({ ...a })),
+            leadFields: leadFields.map((l) => ({ ...l, options: JSON.parse(l.options || '[]') })),
+            paymentConfig: paymentConfig
+              ? { ...paymentConfig, acceptedMethods: JSON.parse(paymentConfig.acceptedMethods || '[]') }
+              : undefined,
+            serviceArea: serviceArea
+              ? { ...serviceArea, values: JSON.parse(serviceArea.values || '[]'), travelFeeRules: JSON.parse(serviceArea.travelFeeRules || '{}') }
+              : undefined,
+            members: members.map((m) => ({ ...m })),
+            pipelineStages: pipeline ? pipeline.stages.map((st) => ({ ...st })) : [],
+          };
+        }
       } catch (e: any) {
-        console.error('[DATABASE_ERROR] getWorkflowExecutionCount error:', e.message);
+        console.error('[DATABASE_ERROR] getTenantBusinessConfig error:', e.message);
       }
     }
 
-    const wf = this.workflows.get(workflowId);
-    if (wf && wf.runsCount !== undefined) return wf.runsCount;
-    return this.executions.filter((e) => e.workflowId === workflowId).length;
+    // Default Configuration per Tenant
+    const isApex = tenantId === 'tenant_apex_lawn';
+
+    const profile = {
+      tenantId,
+      businessName: isApex ? 'Apex Lawn & Care' : "Tyree's Auto Detailing",
+      industry: isApex ? 'Lawn & Landscaping' : 'Auto Detailing',
+      description: isApex ? 'Professional lawn maintenance and landscaping.' : "Raleigh's premier mobile auto detailing service.",
+      primaryPhone: isApex ? '+19195550188' : '+19195550199',
+      primaryEmail: isApex ? 'support@apexlawncare.com' : 'info@tyreesautodetailing.com',
+      websiteDomain: isApex ? 'apexlawncare.com' : 'tyreesautodetailing.com',
+      address: isApex ? '100 Lawn Care Way, Apex, NC' : '500 Detailers Way, Raleigh, NC',
+      timezone: 'America/New_York',
+      currency: 'USD',
+      taxRate: isApex ? 6.75 : 7.25,
+      reviewUrl: isApex ? 'https://g.page/r/apex-lawn/review' : 'https://g.page/r/tyrees-auto/review',
+      serviceType: isApex ? 'Physical Location' : 'Mobile',
+      defaultServiceArea: isApex ? 'Apex & Cary, NC' : 'Greater Raleigh Area',
+      businessHours: { Mon: '8am-5pm', Tue: '8am-5pm', Wed: '8am-5pm', Thu: '8am-5pm', Fri: '8am-5pm', Sat: '9am-3pm', Sun: 'Closed' },
+    };
+
+    const services = isApex
+      ? [
+          { id: 'srv_1', tenantId, name: 'Lawn Mowing', category: 'Maintenance', pricingType: 'HOURLY', basePrice: 45, durationMinutes: 45, bookingMode: 'INSTANT_BOOK', status: 'ACTIVE', sortOrder: 1 },
+          { id: 'srv_2', tenantId, name: 'Yard Cleanup', category: 'Maintenance', pricingType: 'STARTING_AT', basePrice: 150, durationMinutes: 120, bookingMode: 'REQUEST_APPOINTMENT', status: 'ACTIVE', sortOrder: 2 },
+          { id: 'srv_3', tenantId, name: 'Mulch Installation', category: 'Landscaping', pricingType: 'CUSTOM_QUOTE', basePrice: 0, durationMinutes: 240, bookingMode: 'QUOTE_FIRST', status: 'ACTIVE', sortOrder: 3 },
+        ]
+      : [
+          { id: 'srv_1', tenantId, name: 'Full Detail', category: 'Detailing', pricingType: 'FIXED', basePrice: 250, durationMinutes: 180, bookingMode: 'INSTANT_BOOK', status: 'ACTIVE', sortOrder: 1 },
+          { id: 'srv_2', tenantId, name: 'Interior Detail', category: 'Detailing', pricingType: 'FIXED', basePrice: 150, durationMinutes: 120, bookingMode: 'INSTANT_BOOK', status: 'ACTIVE', sortOrder: 2 },
+          { id: 'srv_3', tenantId, name: 'Exterior Detail', category: 'Detailing', pricingType: 'FIXED', basePrice: 120, durationMinutes: 90, bookingMode: 'INSTANT_BOOK', status: 'ACTIVE', sortOrder: 3 },
+          { id: 'srv_4', tenantId, name: 'Ceramic Coating', category: 'Protection', pricingType: 'STARTING_AT', basePrice: 900, durationMinutes: 360, bookingMode: 'QUOTE_FIRST', status: 'ACTIVE', sortOrder: 4 },
+        ];
+
+    const leadFields = isApex
+      ? [
+          { id: 'lf_1', tenantId, key: 'propertyAddress', label: 'Property Address', fieldType: 'ADDRESS', required: true, sortOrder: 1, active: true },
+          { id: 'lf_2', tenantId, key: 'lotSize', label: 'Lot Size (Acres)', fieldType: 'NUMBER', required: false, sortOrder: 2, active: true },
+          { id: 'lf_3', tenantId, key: 'serviceRequested', label: 'Service Requested', fieldType: 'SELECT', required: true, options: ['Lawn Mowing', 'Yard Cleanup', 'Mulch Installation'], sortOrder: 3, active: true },
+          { id: 'lf_4', tenantId, key: 'preferredDate', label: 'Preferred Service Date', fieldType: 'DATE', required: false, sortOrder: 4, active: true },
+        ]
+      : [
+          { id: 'lf_1', tenantId, key: 'vehicleYear', label: 'Vehicle Year', fieldType: 'NUMBER', required: true, sortOrder: 1, active: true },
+          { id: 'lf_2', tenantId, key: 'vehicleMake', label: 'Vehicle Make', fieldType: 'TEXT', required: true, sortOrder: 2, active: true },
+          { id: 'lf_3', tenantId, key: 'vehicleModel', label: 'Vehicle Model', fieldType: 'TEXT', required: true, sortOrder: 3, active: true },
+          { id: 'lf_4', tenantId, key: 'condition', label: 'Vehicle Condition', fieldType: 'SELECT', required: false, options: ['Standard', 'Pet Hair / Heavy Soil', 'Severe Stains'], sortOrder: 4, active: true },
+        ];
+
+    const pipelineStages = isApex
+      ? [
+          { id: 'st_1', pipelineId: `pipe_${tenantId}`, name: 'New Lead', order: 1, stageType: 'NEW', color: '#0284c7' },
+          { id: 'st_2', pipelineId: `pipe_${tenantId}`, name: 'Inspection Scheduled', order: 2, stageType: 'BOOKED', color: '#8b5cf6' },
+          { id: 'st_3', pipelineId: `pipe_${tenantId}`, name: 'Estimate Sent', order: 3, stageType: 'QUOTED', color: '#f59e0b' },
+          { id: 'st_4', pipelineId: `pipe_${tenantId}`, name: 'Approved', order: 4, stageType: 'BOOKED', color: '#10b981' },
+          { id: 'st_5', pipelineId: `pipe_${tenantId}`, name: 'In Progress', order: 5, stageType: 'IN_PROGRESS', color: '#ec4899' },
+          { id: 'st_6', pipelineId: `pipe_${tenantId}`, name: 'Completed', order: 6, stageType: 'COMPLETED', color: '#059669' },
+          { id: 'st_7', pipelineId: `pipe_${tenantId}`, name: 'Paid', order: 7, stageType: 'PAID', color: '#047857' },
+        ]
+      : [
+          { id: 'st_1', pipelineId: `pipe_${tenantId}`, name: 'New Lead', order: 1, stageType: 'NEW', color: '#0284c7' },
+          { id: 'st_2', pipelineId: `pipe_${tenantId}`, name: 'Contacted / Estimate Sent', order: 2, stageType: 'QUOTED', color: '#f59e0b' },
+          { id: 'st_3', pipelineId: `pipe_${tenantId}`, name: 'Appointment Booked', order: 3, stageType: 'BOOKED', color: '#8b5cf6' },
+          { id: 'st_4', pipelineId: `pipe_${tenantId}`, name: 'Job Completed', order: 4, stageType: 'COMPLETED', color: '#059669' },
+          { id: 'st_5', pipelineId: `pipe_${tenantId}`, name: 'Review Requested', order: 5, stageType: 'PAID', color: '#047857' },
+        ];
+
+    const paymentConfig = {
+      tenantId,
+      acceptedMethods: isApex ? ['ACH', 'Card', 'Check'] : ['Cash', 'Card', 'Check', 'PayPal'],
+      paymentTiming: isApex ? 'INVOICE_REQUIRED' : 'DUE_AFTER_SERVICE',
+      notes: 'Payment required upon invoice receipt or completion.',
+    };
+
+    const serviceArea = {
+      tenantId,
+      areaType: isApex ? 'CITIES' : 'ZIP_CODES',
+      values: isApex ? ['Apex', 'Cary', 'Holly Springs'] : ['27601', '27602', '27603', '27604', '27612'],
+      baseLocation: isApex ? 'Apex, NC' : 'Raleigh, NC',
+      radiusMiles: 25,
+    };
+
+    const members = isApex
+      ? [
+          { id: 'mem_1', tenantId, name: 'Dave Miller', email: 'dave@apexlawncare.com', phone: '919-555-0111', role: 'OWNER', active: true },
+          { id: 'mem_2', tenantId, name: 'Sarah Jenkins', email: 'sarah@apexlawncare.com', phone: '919-555-0222', role: 'OFFICE', active: true },
+          { id: 'mem_3', tenantId, name: 'Chris Vance', email: 'chris@apexlawncare.com', phone: '919-555-0333', role: 'CREW', active: true },
+        ]
+      : [
+          { id: 'mem_1', tenantId, name: 'Tyree Smith', email: 'tyree@tyreesautodetailing.com', phone: '919-555-0199', role: 'OWNER', active: true },
+          { id: 'mem_2', tenantId, name: 'Mike Rivera', email: 'mike@tyreesautodetailing.com', phone: '919-555-0144', role: 'TECHNICIAN', active: true },
+        ];
+
+    return {
+      profile,
+      services,
+      packages: [],
+      addons: [],
+      leadFields,
+      paymentConfig,
+      serviceArea,
+      members,
+      pipelineStages,
+    };
+  }
+
+  public async saveTenantBusinessConfig(input: { tenantId: string; section: string; data: any; userId?: string }): Promise<any> {
+    const { tenantId, section, data, userId = 'user_master_admin' } = input;
+
+    if (process.env.DATABASE_URL) {
+      try {
+        await this.ensureTenantDatabaseSeeded(tenantId);
+
+        if (section === 'profile') {
+          await prisma.businessProfile.upsert({
+            where: { tenantId },
+            update: {
+              businessName: data.businessName,
+              industry: data.industry,
+              description: data.description,
+              primaryPhone: data.primaryPhone,
+              primaryEmail: data.primaryEmail,
+              websiteDomain: data.websiteDomain,
+              address: data.address,
+              timezone: data.timezone,
+              currency: data.currency,
+              taxRate: Number(data.taxRate || 0),
+              reviewUrl: data.reviewUrl,
+              serviceType: data.serviceType,
+              defaultServiceArea: data.defaultServiceArea,
+              businessHours: JSON.stringify(data.businessHours || {}),
+            },
+            create: {
+              tenantId,
+              businessName: data.businessName || 'Business Name',
+              industry: data.industry || 'General',
+              description: data.description,
+              primaryPhone: data.primaryPhone,
+              primaryEmail: data.primaryEmail,
+              websiteDomain: data.websiteDomain,
+              address: data.address,
+              timezone: data.timezone || 'America/New_York',
+              currency: data.currency || 'USD',
+              taxRate: Number(data.taxRate || 0),
+              reviewUrl: data.reviewUrl,
+              serviceType: data.serviceType || 'Both',
+              defaultServiceArea: data.defaultServiceArea,
+              businessHours: JSON.stringify(data.businessHours || {}),
+            },
+          });
+        }
+
+        await prisma.auditLog.create({
+          data: {
+            tenantId,
+            userId,
+            action: `BUSINESS_CONFIG_UPDATED_${section.toUpperCase()}`,
+            details: JSON.stringify({ section }),
+          },
+        });
+      } catch (e: any) {
+        console.error('[DATABASE_ERROR] saveTenantBusinessConfig error:', e.message);
+      }
+    }
+
+    this.auditLogs.unshift({
+      id: `audit_cfg_${Date.now()}`,
+      tenantId,
+      userId,
+      action: `BUSINESS_CONFIG_UPDATED_${section.toUpperCase()}`,
+      details: { section },
+      timestamp: new Date().toISOString(),
+    });
+
+    return await this.getTenantBusinessConfig(tenantId);
   }
 }
 

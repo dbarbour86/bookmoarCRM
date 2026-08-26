@@ -4,7 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { useParams, usePathname } from 'next/navigation';
 import { db } from '@/lib/db';
-import { ArrowLeft, Users, LayoutGrid, GitBranch, MessageSquare, Calendar, Globe, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, Users, LayoutGrid, GitBranch, MessageSquare, Calendar, Globe, Building2 } from 'lucide-react';
 
 export default function TenantManagementLayout({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -23,6 +23,7 @@ export default function TenantManagementLayout({ children }: { children: React.R
     { label: 'Workflows', href: `/client/${tenantId}/workflows`, icon: GitBranch },
     { label: 'Conversations', href: `/client/${tenantId}/conversations`, icon: MessageSquare },
     { label: 'Appointments', href: `/client/${tenantId}/appointments`, icon: Calendar },
+    { label: 'Business Setup', href: `/client/${tenantId}/business-setup`, icon: Building2 },
   ];
 
   return (
