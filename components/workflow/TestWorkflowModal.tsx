@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { db, WorkflowData, WorkflowVersionData, WorkflowExecutionData } from '@/lib/db';
+import { db, WorkflowData, WorkflowVersionData, WorkflowExecutionData, PlatformEventData } from '@/lib/db';
 import { executeWorkflowInstance } from '@/lib/workflow/engine';
 import { X, Play, CheckCircle2, AlertTriangle, Sparkles, Clock, ArrowRight } from 'lucide-react';
 
