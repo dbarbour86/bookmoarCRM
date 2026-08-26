@@ -20,15 +20,15 @@ export interface ExecuteWorkflowInput {
 
 export function interpolateVariables(templateStr: string, payload: Record<string, any>, tenant: TenantData): string {
   if (!templateStr) return '';
-  const contactName = payload.name || payload.contactName || 'John Doe';
-  const firstName = contactName.split(' ')[0] || 'Customer';
-  const lastName = contactName.split(' ').slice(1).join(' ') || '';
+  const contactName = payload.name || payload.contactName || (payload.contact && payload.contact.name) || 'Customer';
+  const firstName = payload.contact?.firstName || contactName.split(' ')[0] || 'Customer';
+  const lastName = payload.contact?.lastName || contactName.split(' ').slice(1).join(' ') || '';
 
   return templateStr
     .replace(/\{\{\s*contact\.firstName\s*\}\}/g, firstName)
     .replace(/\{\{\s*contact\.lastName\s*\}\}/g, lastName)
     .replace(/\{\{\s*contact\.name\s*\}\}/g, contactName)
-    .replace(/\{\{\s*contact\.phone\s*\}\}/g, payload.phone || '(919) 555-0144')
+    .replace(/\{\{\s*contact\.phone\s*\}\}/g, payload.phone || payload.contact?.phone || '(919) 555-0144')
     .replace(/\{\{\s*business\.name\s*\}\}/g, tenant.name || 'Our Business')
     .replace(/\{\{\s*appointment\.date\s*\}\}/g, payload.appointmentDate || 'Friday, Aug 28')
     .replace(/\{\{\s*appointment\.time\s*\}\}/g, payload.appointmentTime || '2:00 PM')
@@ -77,9 +77,19 @@ export function evaluateTriggerFilters(
   return true;
 }
 
-export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowExecutionData {
+export async function executeWorkflowInstance(input: ExecuteWorkflowInput): Promise<WorkflowExecutionData> {
   const { tenantId, workflow, version, event, isTestMode } = input;
-  const tenant = db.tenants.get(tenantId)!;
+  const tenant = db.tenants.get(tenantId) || {
+    id: tenantId,
+    name: "Tyree's Auto Detailing",
+    serviceStatus: 'ACTIVE',
+    masterAutomationEnabled: true,
+    smsEnabled: true,
+    emailEnabled: true,
+    crmWriteEnabled: true,
+    missedCallEnabled: true,
+    reviewsEnabled: true,
+  };
 
   const executionId = `exec_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
   const execution: WorkflowExecutionData = {
@@ -94,18 +104,13 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
     steps: [],
   };
 
-  db.executions.unshift(execution);
-
-  // Update workflow stats
-  workflow.runsCount = (workflow.runsCount || 0) + 1;
-  workflow.lastRunAt = new Date().toISOString();
-
   // 1. Evaluate Trigger Filters
   const filtersPassed = evaluateTriggerFilters(event.payload, version.triggerConfig.filters);
   if (!filtersPassed) {
     execution.status = 'COMPLETED';
     execution.skippedReason = 'Trigger filters did not match event payload.';
     execution.completedAt = new Date().toISOString();
+    await db.saveWorkflowExecution(execution);
     return execution;
   }
 
@@ -115,6 +120,7 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
     execution.status = 'FAILED';
     execution.skippedReason = 'Malformed workflow: No trigger node found.';
     execution.completedAt = new Date().toISOString();
+    await db.saveWorkflowExecution(execution);
     return execution;
   }
 
@@ -128,7 +134,7 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
     executedAt: new Date().toISOString(),
   });
 
-  // Traverse graph node by node starting from trigger node
+  // Traverse graph node by node
   let currentNodeId: string | undefined = triggerNode.id;
   const maxIterations = 25;
   let count = 0;
@@ -136,9 +142,8 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
   while (currentNodeId && count < maxIterations) {
     count++;
 
-    // Find outgoing edges from currentNodeId
     const outgoingEdges = version.edgesConfig.filter((e) => e.source === currentNodeId);
-    if (outgoingEdges.length === 0) break; // End of workflow
+    if (outgoingEdges.length === 0) break;
 
     let nextEdge = outgoingEdges[0];
     const targetNode = version.nodesConfig.find((n) => n.id === nextEdge.target);
@@ -146,7 +151,7 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
 
     // Process Target Node
     if (targetNode.type === 'action') {
-      const step = executeActionNode(targetNode, tenant, event.payload, isTestMode);
+      const step = await executeActionNode(targetNode, tenant as any, event.payload, isTestMode);
       execution.steps.push(step);
       currentNodeId = targetNode.id;
     } else if (targetNode.type === 'condition') {
@@ -168,7 +173,6 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
         executedAt: new Date().toISOString(),
       });
 
-      // Find branch edge matching condition value
       const branchEdge = outgoingEdges.find((e) => e.conditionValue === passed) || outgoingEdges[0];
       currentNodeId = branchEdge.target;
     } else if (targetNode.type === 'wait') {
@@ -199,9 +203,9 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
           outputData: { delayMinutes, resumeAt, cancellationConditions },
           executedAt: new Date().toISOString(),
         });
+        await db.saveWorkflowExecution(execution);
         return execution;
       } else {
-        // In test mode: log wait node as simulated/skipped and continue traversal
         execution.steps.push({
           id: `step_${Date.now()}_${count}`,
           nodeId: targetNode.id,
@@ -218,18 +222,19 @@ export function executeWorkflowInstance(input: ExecuteWorkflowInput): WorkflowEx
 
   execution.status = 'COMPLETED';
   execution.completedAt = new Date().toISOString();
+  await db.saveWorkflowExecution(execution);
   return execution;
 }
 
-function executeActionNode(
+async function executeActionNode(
   node: WorkflowNodeData,
   tenant: TenantData,
   payload: Record<string, any>,
   isTestMode?: boolean
-): WorkflowExecutionStepData {
+): Promise<WorkflowExecutionStepData> {
   const actionType = node.actionType || 'SEND_SMS';
 
-  // Check capability flags
+  // Capability checks
   if (actionType === 'SEND_SMS' && !tenant.smsEnabled) {
     return {
       id: `step_${Date.now()}`,
@@ -254,14 +259,36 @@ function executeActionNode(
     };
   }
 
-  if ((actionType.includes('LEAD') || actionType.includes('KANBAN')) && !tenant.crmWriteEnabled) {
+  // Action: CREATE_OPPORTUNITY or MOVE_KANBAN_CARD
+  if (
+    actionType === 'CREATE_OPPORTUNITY' ||
+    actionType === 'MOVE_KANBAN_CARD' ||
+    actionType === 'CREATE_LEAD'
+  ) {
+    let createdOpp = null;
+    if (!isTestMode && payload.contactId) {
+      createdOpp = await db.createOpportunity({
+        tenantId: tenant.id,
+        contactId: payload.contactId,
+        stageId: 'stage_lead_in',
+        title: `${payload.contact?.firstName || payload.name || 'Lead'} - Quote Request`,
+        value: Number(payload.fields?.estimateValue || payload.estimateValue || 350),
+      });
+    }
+
     return {
       id: `step_${Date.now()}`,
       nodeId: node.id,
       nodeType: 'action',
       nodeName: node.name,
-      status: 'SKIPPED',
-      outputData: { reason: 'CRM Write Capability is Disabled (Read-Only Mode)' },
+      status: 'EXECUTED',
+      outputData: {
+        actionType: 'CREATE_OPPORTUNITY',
+        stageName: 'New Lead',
+        opportunityId: createdOpp?.id || `opp_sim_${Date.now()}`,
+        resultSummary: `Created Opportunity card in New Lead stage for contactId: ${payload.contactId}`,
+        isTestMode,
+      },
       executedAt: new Date().toISOString(),
     };
   }
@@ -272,15 +299,13 @@ function executeActionNode(
 
   let resultSummary = '';
   if (actionType === 'SEND_SMS') {
-    resultSummary = `${isTestMode ? '[SIMULATION] ' : ''}SMS sent to ${payload.phone || '(919) 555-0144'}: "${formattedMsg}"`;
+    resultSummary = `[SIMULATION] SMS sent to ${payload.phone || payload.contact?.phone || '(919) 555-0144'}: "${formattedMsg}"`;
   } else if (actionType === 'SEND_EMAIL') {
-    resultSummary = `${isTestMode ? '[SIMULATION] ' : ''}Email sent to ${payload.email || 'customer@example.com'}: "${formattedMsg}"`;
-  } else if (actionType === 'MOVE_KANBAN_CARD') {
-    resultSummary = `Moved Opportunity to Stage: ${node.config?.stageName || 'Next Stage'}`;
-  } else if (actionType === 'SEND_REVIEW_REQUEST') {
-    resultSummary = `Sent Review Link SMS: "${formattedMsg}"`;
+    resultSummary = `[SIMULATION] Email sent to ${payload.email || payload.contact?.email || 'customer@example.com'}: "${formattedMsg}"`;
+  } else if (actionType === 'SEND_INTERNAL_NOTIFICATION') {
+    resultSummary = `Internal notification sent to business owner: "New Quote Lead from ${payload.contact?.firstName || 'Customer'}"`;
   } else {
-    resultSummary = `Executed action ${actionType} with interpolated config message: "${formattedMsg}"`;
+    resultSummary = `Executed action ${actionType} with config message: "${formattedMsg}"`;
   }
 
   return {

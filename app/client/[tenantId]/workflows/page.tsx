@@ -31,7 +31,7 @@ export default function WorkflowsPage() {
   const tenantId = (params?.tenantId as string) || 'tenant_tyrees_auto';
   const tenant = db.tenants.get(tenantId);
 
-  const [workflows, setWorkflows] = useState<WorkflowData[]>(db.getTenantWorkflows(tenantId));
+  const [workflows, setWorkflows] = useState<WorkflowData[]>([]);
   const [activeTab, setActiveTab] = useState<'ALL' | 'ACTIVE' | 'DRAFTS' | 'DISABLED' | 'TEMPLATES' | 'INSPECTOR'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -40,14 +40,29 @@ export default function WorkflowsPage() {
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState<WorkflowData | null>(null);
   const [editingVersion, setEditingVersion] = useState<WorkflowVersionData | null>(null);
-  const [executions, setExecutions] = useState<WorkflowExecutionData[]>(
-    db.executions.filter((e) => e.tenantId === tenantId)
-  );
+  const [executions, setExecutions] = useState<WorkflowExecutionData[]>([]);
+
+  const fetchExecutionsAndWorkflows = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/crm/executions?tenantId=${tenantId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.workflows) setWorkflows(data.workflows);
+        if (data.executions) setExecutions(data.executions);
+      }
+    } catch (err) {
+      console.warn('[WORKFLOW_FETCH_ERR] Fallback:', err);
+      setWorkflows(db.getTenantWorkflows(tenantId));
+      setExecutions(db.executions.filter((e) => e.tenantId === tenantId));
+    }
+  }, [tenantId]);
+
+  React.useEffect(() => {
+    fetchExecutionsAndWorkflows();
+  }, [fetchExecutionsAndWorkflows]);
 
   const refreshData = () => {
-    const list = db.getTenantWorkflows(tenantId);
-    setWorkflows(list);
-    setExecutions([...db.executions.filter((e) => e.tenantId === tenantId)]);
+    fetchExecutionsAndWorkflows();
 
     if (editingWorkflow) {
       const updated = db.workflows.get(editingWorkflow.id);

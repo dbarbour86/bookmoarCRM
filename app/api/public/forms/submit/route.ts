@@ -127,8 +127,8 @@ export async function POST(req: Request) {
       await db.checkAndRecordIdempotency(tenant.id, eventId, responsePayload);
     }
 
-    // 5. Emit PlatformEvent: FORM_SUBMITTED
-    EventBus.publish({
+    // 5. Emit PlatformEvent: FORM_SUBMITTED & Trigger Speed-to-Lead Workflow
+    const busResult = await EventBus.publish({
       tenantId: tenant.id,
       eventType: 'FORM_SUBMITTED',
       source: 'PUBLIC_WEBSITE_API',
