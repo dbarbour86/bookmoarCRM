@@ -1429,7 +1429,12 @@ class MockDatabase {
         }
       } catch (e: any) {
         console.error('[DATABASE_ERROR] getAllTenants error:', e.message);
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error(`PostgreSQL tenant query failed: ${e.message}`);
+        }
       }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL environment variable is missing in production deployment.');
     }
 
     return Array.from(this.tenants.values());
@@ -1443,88 +1448,67 @@ class MockDatabase {
     const { tenantId, serviceStatus, userId = 'user_master_admin' } = input;
     const masterAutomationEnabled = serviceStatus === 'ACTIVE';
 
-    let updatedTenant: TenantData | null = null;
-    let auditLogEntry: AuditLogData | null = null;
-
-    if (process.env.DATABASE_URL) {
-      try {
-        await this.ensureTenantDatabaseSeeded(tenantId);
-
-        const dbTenant = await prisma.clientTenant.update({
-          where: { id: tenantId },
-          data: {
-            serviceStatus,
-            masterAutomationEnabled,
-            updatedAt: new Date(),
-          },
-        });
-
-        updatedTenant = {
-          id: dbTenant.id,
-          name: dbTenant.name,
-          domain: dbTenant.domain,
-          serviceStatus: dbTenant.serviceStatus as any,
-          plan: dbTenant.plan,
-          masterAutomationEnabled: dbTenant.masterAutomationEnabled,
-          smsEnabled: dbTenant.smsEnabled,
-          emailEnabled: dbTenant.emailEnabled,
-          crmWriteEnabled: dbTenant.crmWriteEnabled,
-          missedCallEnabled: dbTenant.missedCallEnabled,
-          reviewsEnabled: dbTenant.reviewsEnabled,
-          phoneConfig: JSON.parse(dbTenant.phoneConfig || '{}'),
-          emailConfig: JSON.parse(dbTenant.emailConfig || '{}'),
-          websiteConfig: JSON.parse(dbTenant.websiteConfig || '{}'),
-          createdAt: dbTenant.createdAt.toISOString(),
-          updatedAt: dbTenant.updatedAt.toISOString(),
-        };
-
-        const dbAudit = await prisma.auditLog.create({
-          data: {
-            tenantId,
-            userId,
-            action: `SERVICE_STATUS_CHANGED_${serviceStatus}`,
-            details: JSON.stringify({ tenantName: dbTenant.name, newStatus: serviceStatus }),
-          },
-        });
-
-        auditLogEntry = {
-          id: dbAudit.id,
-          tenantId: dbAudit.tenantId || undefined,
-          userId: dbAudit.userId,
-          action: dbAudit.action,
-          details: JSON.parse(dbAudit.details || '{}'),
-          timestamp: dbAudit.timestamp.toISOString(),
-        };
-      } catch (e: any) {
-        console.error('[DATABASE_ERROR] updateTenantServiceStatus failed:', e.message);
-        throw new Error(`Database tenant status update failed: ${e.message}`);
-      }
+    if (!process.env.DATABASE_URL && process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_URL environment variable is missing in production environment');
     }
 
-    if (!updatedTenant) {
-      const existing = this.tenants.get(tenantId);
-      if (!existing) throw new Error('Tenant not found');
+    try {
+      await this.ensureTenantDatabaseSeeded(tenantId);
 
-      existing.serviceStatus = serviceStatus;
-      existing.masterAutomationEnabled = masterAutomationEnabled;
-      existing.updatedAt = new Date().toISOString();
-      updatedTenant = existing;
+      const dbTenant = await prisma.clientTenant.update({
+        where: { id: tenantId },
+        data: {
+          serviceStatus,
+          masterAutomationEnabled,
+          updatedAt: new Date(),
+        },
+      });
 
-      auditLogEntry = {
-        id: `audit_stat_${Date.now()}`,
-        tenantId: existing.id,
-        userId,
-        action: `SERVICE_STATUS_CHANGED_${serviceStatus}`,
-        details: { tenantName: existing.name, newStatus: serviceStatus },
-        timestamp: new Date().toISOString(),
+      const updatedTenant: TenantData = {
+        id: dbTenant.id,
+        name: dbTenant.name,
+        domain: dbTenant.domain,
+        serviceStatus: dbTenant.serviceStatus as any,
+        plan: dbTenant.plan,
+        masterAutomationEnabled: dbTenant.masterAutomationEnabled,
+        smsEnabled: dbTenant.smsEnabled,
+        emailEnabled: dbTenant.emailEnabled,
+        crmWriteEnabled: dbTenant.crmWriteEnabled,
+        missedCallEnabled: dbTenant.missedCallEnabled,
+        reviewsEnabled: dbTenant.reviewsEnabled,
+        phoneConfig: JSON.parse(dbTenant.phoneConfig || '{}'),
+        emailConfig: JSON.parse(dbTenant.emailConfig || '{}'),
+        websiteConfig: JSON.parse(dbTenant.websiteConfig || '{}'),
+        createdAt: dbTenant.createdAt.toISOString(),
+        updatedAt: dbTenant.updatedAt.toISOString(),
       };
-      this.auditLogs.unshift(auditLogEntry);
-    } else {
-      this.tenants.set(updatedTenant.id, updatedTenant);
-      if (auditLogEntry) this.auditLogs.unshift(auditLogEntry);
-    }
 
-    return { tenant: updatedTenant, auditLog: auditLogEntry! };
+      const dbAudit = await prisma.auditLog.create({
+        data: {
+          tenantId,
+          userId,
+          action: `SERVICE_STATUS_CHANGED_${serviceStatus}`,
+          details: JSON.stringify({ tenantName: dbTenant.name, newStatus: serviceStatus }),
+        },
+      });
+
+      const auditLogEntry: AuditLogData = {
+        id: dbAudit.id,
+        tenantId: dbAudit.tenantId || undefined,
+        userId: dbAudit.userId,
+        action: dbAudit.action,
+        details: JSON.parse(dbAudit.details || '{}'),
+        timestamp: dbAudit.timestamp.toISOString(),
+      };
+
+      this.tenants.set(updatedTenant.id, updatedTenant);
+      this.auditLogs.unshift(auditLogEntry);
+
+      return { tenant: updatedTenant, auditLog: auditLogEntry };
+    } catch (e: any) {
+      console.error('[DATABASE_ERROR] updateTenantServiceStatus failed:', e.message);
+      throw new Error(`Database tenant status update failed: ${e.message}`);
+    }
   }
 
   public async mutateBusinessConfig(input: {

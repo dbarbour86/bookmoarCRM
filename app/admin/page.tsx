@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 
 export default function MasterAdminPage() {
-  const [tenants, setTenants] = useState<TenantData[]>(Array.from(db.tenants.values()));
+  const [tenants, setTenants] = useState<TenantData[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<TenantData | null>(null);
   const [exportModalTenant, setExportModalTenant] = useState<TenantData | null>(null);
   const [exportDataType, setExportDataType] = useState<'CONTACTS' | 'OPPORTUNITIES' | 'FORM_SUBMISSIONS' | 'ALL'>('ALL');
