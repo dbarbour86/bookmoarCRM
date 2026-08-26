@@ -79,7 +79,7 @@ export class EventBus {
 
     // Find matching active workflows for this tenant
     const tenantWorkflows = Array.from(db.workflows.values()).filter(
-      (w) => w.tenantId === input.tenantId && w.active
+      (w) => w.tenantId === input.tenantId && w.status === 'ACTIVE'
     );
 
     for (const workflow of tenantWorkflows) {
