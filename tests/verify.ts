@@ -26,10 +26,10 @@ export async function runSystemVerification() {
   db.ensureSpeedToLeadWorkflow('tenant_tyrees_auto');
 
   // 2. Test Central Guard & Service Status Kill Switch
-  const guardActive = evaluateEventGuard('tenant_tyrees_auto', 'FORM_SUBMITTED');
+  const guardActive = await evaluateEventGuard('tenant_tyrees_auto', 'FORM_SUBMITTED');
   assert(guardActive.allowed === true, 'Guard allows events for ACTIVE tenant with enabled capabilities');
 
-  const guardSuspended = evaluateEventGuard('tenant_apex_lawn', 'FORM_SUBMITTED');
+  const guardSuspended = await evaluateEventGuard('tenant_apex_lawn', 'FORM_SUBMITTED');
   assert(guardSuspended.allowed === false && guardSuspended.failedFlag === 'serviceStatus:SUSPENDED', 'Guard BLOCKS events for SUSPENDED tenant');
 
   // 3. Test Event Bus & Workflow Trigger Execution
