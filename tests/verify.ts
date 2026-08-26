@@ -68,7 +68,7 @@ export async function runSystemVerification() {
 
   // 6. Test Data Exporter
   const exportResult = await exportAllDataZip('tenant_tyrees_auto');
-  assert(exportResult.length > 0, 'Data Exporter generated ZIP buffer file');
+  assert(exportResult.zipBuffer.length > 0, 'Data Exporter generated ZIP buffer file');
 
   console.log('===========================================================');
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);
