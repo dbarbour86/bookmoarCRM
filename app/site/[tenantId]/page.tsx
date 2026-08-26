@@ -8,7 +8,25 @@ import { Send, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 export default function ClientWebsitePage() {
   const params = useParams();
   const tenantId = (params?.tenantId as string) || 'tenant_tyrees_auto';
-  const tenant = db.tenants.get(tenantId);
+  const [tenant, setTenant] = useState<any>(db.tenants.get(tenantId));
+
+  React.useEffect(() => {
+    async function loadTenant() {
+      try {
+        const res = await fetch('/api/admin/tenants');
+        if (res.ok) {
+          const data = await res.json();
+          const found = (data.tenants || []).find((t: any) => t.id === tenantId);
+          if (found) {
+            setTenant(found);
+          }
+        }
+      } catch (err) {
+        console.warn('[SITE_TENANT_FETCH_ERR]', err);
+      }
+    }
+    loadTenant();
+  }, [tenantId]);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');

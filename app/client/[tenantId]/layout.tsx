@@ -10,12 +10,33 @@ export default function TenantManagementLayout({ children }: { children: React.R
   const params = useParams();
   const pathname = usePathname();
   const tenantId = (params?.tenantId as string) || 'tenant_tyrees_auto';
-  const tenant = db.tenants.get(tenantId) || {
-    id: tenantId,
-    name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : tenantId === 'tenant_apex_lawn' ? 'Apex Lawn & Care' : 'Client Business',
-    serviceStatus: 'ACTIVE',
-    plan: 'Grow',
-  };
+
+  const [tenant, setTenant] = React.useState<any>(
+    db.tenants.get(tenantId) || {
+      id: tenantId,
+      name: tenantId === 'tenant_tyrees_auto' ? "Tyree's Auto Detailing" : tenantId === 'tenant_apex_lawn' ? 'Apex Lawn & Care' : 'Client Business',
+      serviceStatus: 'ACTIVE',
+      plan: 'Grow',
+    }
+  );
+
+  React.useEffect(() => {
+    async function loadTenant() {
+      try {
+        const res = await fetch('/api/admin/tenants');
+        if (res.ok) {
+          const data = await res.json();
+          const found = (data.tenants || []).find((t: any) => t.id === tenantId);
+          if (found) {
+            setTenant(found);
+          }
+        }
+      } catch (err) {
+        console.warn('[TENANT_LAYOUT_FETCH_ERR]', err);
+      }
+    }
+    loadTenant();
+  }, [tenantId]);
 
   const navItems = [
     { label: 'CRM & Leads', href: `/client/${tenantId}/crm`, icon: Users },
