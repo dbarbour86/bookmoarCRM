@@ -694,6 +694,119 @@ class MockDatabase {
     return list;
   }
 
+  public createWorkflow(input: { tenantId: string; name: string; description?: string; eventType: string }): WorkflowData {
+    const id = `wf_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const versionId = `ver_1_${id}`;
+
+    const initialVersion: WorkflowVersionData = {
+      id: versionId,
+      workflowId: id,
+      versionNumber: 1,
+      status: 'DRAFT',
+      triggerConfig: { eventType: input.eventType, filters: [] },
+      nodesConfig: [
+        {
+          id: 'node_trig_1',
+          type: 'trigger',
+          name: `Trigger: ${input.eventType}`,
+          config: { eventType: input.eventType },
+          position: { x: 250, y: 50 },
+        },
+      ],
+      edgesConfig: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    const workflow: WorkflowData = {
+      id,
+      tenantId: input.tenantId,
+      name: input.name,
+      description: input.description || `Automated workflow for ${input.eventType}`,
+      status: 'DRAFT',
+      activeVersionId: versionId,
+      draftVersionId: versionId,
+      runsCount: 0,
+      versions: [initialVersion],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.workflows.set(id, workflow);
+    return workflow;
+  }
+
+  public publishWorkflowVersion(workflowId: string, versionId: string): WorkflowData | null {
+    const workflow = this.workflows.get(workflowId);
+    if (!workflow) return null;
+
+    const version = workflow.versions.find((v) => v.id === versionId);
+    if (!version) return null;
+
+    version.status = 'PUBLISHED';
+    workflow.activeVersionId = version.id;
+    workflow.draftVersionId = undefined;
+    workflow.status = 'ACTIVE';
+    workflow.updatedAt = new Date().toISOString();
+    return workflow;
+  }
+
+  public createDraftVersion(workflowId: string): WorkflowVersionData | null {
+    const workflow = this.workflows.get(workflowId);
+    if (!workflow) return null;
+
+    const currentVersion = workflow.versions.find((v) => v.id === workflow.activeVersionId) || workflow.versions[0];
+    const newVersionNumber = workflow.versions.length + 1;
+    const newVersionId = `ver_${newVersionNumber}_${workflowId}`;
+
+    const newDraft: WorkflowVersionData = {
+      id: newVersionId,
+      workflowId,
+      versionNumber: newVersionNumber,
+      status: 'DRAFT',
+      triggerConfig: JSON.parse(JSON.stringify(currentVersion.triggerConfig)),
+      nodesConfig: JSON.parse(JSON.stringify(currentVersion.nodesConfig)),
+      edgesConfig: JSON.parse(JSON.stringify(currentVersion.edgesConfig)),
+      createdAt: new Date().toISOString(),
+    };
+
+    workflow.versions.push(newDraft);
+    workflow.draftVersionId = newVersionId;
+    workflow.updatedAt = new Date().toISOString();
+    return newDraft;
+  }
+
+  public duplicateWorkflow(workflowId: string): WorkflowData | null {
+    const orig = this.workflows.get(workflowId);
+    if (!orig) return null;
+
+    const newWf = this.createWorkflow({
+      tenantId: orig.tenantId,
+      name: `${orig.name} (Copy)`,
+      description: orig.description,
+      eventType: orig.versions[0]?.triggerConfig.eventType || 'FORM_SUBMITTED',
+    });
+
+    const activeVersion = orig.versions.find((v) => v.id === orig.activeVersionId) || orig.versions[0];
+    const newVer = newWf.versions[0];
+    newVer.nodesConfig = JSON.parse(JSON.stringify(activeVersion.nodesConfig));
+    newVer.edgesConfig = JSON.parse(JSON.stringify(activeVersion.edgesConfig));
+    newVer.triggerConfig = JSON.parse(JSON.stringify(activeVersion.triggerConfig));
+
+    return newWf;
+  }
+
+  public deleteWorkflow(workflowId: string): boolean {
+    return this.workflows.delete(workflowId);
+  }
+
+  public toggleWorkflowStatus(workflowId: string, newStatus: 'ACTIVE' | 'DISABLED'): WorkflowData | null {
+    const wf = this.workflows.get(workflowId);
+    if (!wf) return null;
+    wf.status = newStatus;
+    wf.updatedAt = new Date().toISOString();
+    return wf;
+  }
+
   public ensureSpeedToLeadWorkflow(tenantId: string): WorkflowData {
     const existing = Array.from(this.workflows.values()).find((w) => w.tenantId === tenantId && w.name.includes('Speed-to-Lead'));
     if (existing) return existing;
